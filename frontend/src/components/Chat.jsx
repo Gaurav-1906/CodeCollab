@@ -9,15 +9,19 @@ const Chat = ({ user, roomId }) => {
   const socketRef = useRef();
   const typingTimeoutRef = useRef();
 
-  // Use environment variable for Socket URL
-  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://codecollab-backend-omu2.onrender.com';
+  // FIXED: Use environment variable, no localhost fallback
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
 
   useEffect(() => {
     if (!user || !roomId || roomId === 'lobby') return;
 
     console.log('💬 Chat mounting for room:', roomId);
     
-    // Connect to socket
+    if (!SOCKET_URL) {
+      console.error('❌ VITE_SOCKET_URL is not defined');
+      return;
+    }
+    
     socketRef.current = io(SOCKET_URL, {
       withCredentials: true,
       transports: ['websocket', 'polling']
@@ -48,7 +52,6 @@ const Chat = ({ user, roomId }) => {
       });
     });
 
-    // System notifications for join/leave
     socketRef.current.on('user-joined-notification', ({ username }) => {
       setMessages(prev => [...prev, {
         id: Date.now(),
@@ -80,7 +83,7 @@ const Chat = ({ user, roomId }) => {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [roomId, user?._id, user?.username]);
+  }, [roomId, user?._id, user?.username, SOCKET_URL]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -99,7 +102,6 @@ const Chat = ({ user, roomId }) => {
       socketRef.current.emit('chat-message', { roomId, message });
       setInputMessage('');
       
-      // Stop typing indicator after sending
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
       }
@@ -112,17 +114,16 @@ const Chat = ({ user, roomId }) => {
     
     if (!socketRef.current) return;
     
-    // Clear previous timeout
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
     
-    // Send typing started
     socketRef.current.emit('typing', { roomId, isTyping: true, username: user.username });
     
-    // Set timeout to stop typing after 2 seconds of no input
     typingTimeoutRef.current = setTimeout(() => {
-      socketRef.current.emit('typing', { roomId, isTyping: false, username: user.username });
+      if (socketRef.current) {
+        socketRef.current.emit('typing', { roomId, isTyping: false, username: user.username });
+      }
     }, 2000);
   };
 

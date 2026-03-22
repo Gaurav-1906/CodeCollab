@@ -17,26 +17,32 @@ const GameChat = ({ user, roomId }) => {
   const peersRef = useRef({});
   const mountedRef = useRef(true);
 
-  // Use environment variable for Socket URL
-  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://codecollab-backend-omu2.onrender.com';
+  // FIXED: Use environment variable, no localhost fallback
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
 
   useEffect(() => {
     mountedRef.current = true;
+    
     if (roomId === 'lobby') {
       setConnectionStatus('Join a room to start video call');
       return;
     }
 
     console.log('🎥 GameChat mounting for room:', roomId);
+    
+    if (!SOCKET_URL) {
+      console.error('❌ VITE_SOCKET_URL is not defined');
+      setConnectionStatus('Configuration error');
+      return;
+    }
+    
     setConnectionStatus('Requesting camera & mic...');
 
-    // Connect to socket
     socketRef.current = io(SOCKET_URL, {
       withCredentials: true,
       transports: ['websocket', 'polling']
     });
 
-    // Get media stream
     navigator.mediaDevices.getUserMedia({ audio: true, video: true })
       .then(mediaStream => {
         if (!mountedRef.current) return;
@@ -47,7 +53,6 @@ const GameChat = ({ user, roomId }) => {
         }
         setConnectionStatus('Camera active – joining room...');
         
-        // Join room after getting stream
         socketRef.current.emit('join-room', {
           roomId,
           userId: user._id,
@@ -62,7 +67,6 @@ const GameChat = ({ user, roomId }) => {
         console.error('❌ Media error:', err);
         if (!mountedRef.current) return;
         setConnectionStatus('Camera/Mic access denied – audio only');
-        // Still join the room without a stream
         socketRef.current.emit('join-room', {
           roomId,
           userId: user._id,
@@ -70,7 +74,6 @@ const GameChat = ({ user, roomId }) => {
         });
       });
 
-    // Socket event handlers
     socketRef.current.on('user-joined', ({ userId, username }) => {
       if (!mountedRef.current) return;
       console.log('👤 User joined:', username);
@@ -123,7 +126,7 @@ const GameChat = ({ user, roomId }) => {
       }
       Object.values(peersRef.current).forEach(({ peer }) => peer.destroy());
     };
-  }, [roomId, user?._id, user?.username]);
+  }, [roomId, user?._id, user?.username, SOCKET_URL]);
 
   const createPeer = (targetUserId, callerId, stream) => {
     const peer = new Peer({

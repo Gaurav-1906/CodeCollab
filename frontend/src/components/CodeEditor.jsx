@@ -27,10 +27,15 @@ const CodeEditor = ({ user, roomId }) => {
   const terminalEndRef = useRef(null);
   const terminalInputRef = useRef(null);
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
- const WS_URL = import.meta.env.VITE_API_URL 
-  ? import.meta.env.VITE_API_URL.replace('https', 'wss').replace('http', 'ws') 
-  : 'wss://codecollab-backend-omu2.onrender.com';
+  // FIXED: Use environment variable, no localhost fallback
+  const API_URL = import.meta.env.VITE_API_URL;
+  // FIXED: WebSocket URL without :5001 port
+  const WS_URL = API_URL 
+    ? API_URL.replace('https', 'wss').replace('http', 'ws')
+    : 'wss://codecollab-backend-omu2.onrender.com';
+
+  console.log('🔌 CodeEditor WebSocket URL:', WS_URL);
+  console.log('🔌 CodeEditor API URL:', API_URL);
 
   // Load Pyodide for Python execution
   useEffect(() => {
@@ -102,15 +107,16 @@ const CodeEditor = ({ user, roomId }) => {
     { value: 'sql', label: 'SQL' },
   ];
 
+  // Yjs collaboration setup
   useEffect(() => {
-    if (!editorRef.current || !monacoRef.current) return;
+    if (!editorRef.current || !monacoRef.current || roomId === 'lobby') return;
 
     const ydoc = new Y.Doc();
-const provider = new WebsocketProvider(
-  WS_URL,
-  `code-${roomId}-${currentFile.name}`,
-  ydoc
-);
+    const provider = new WebsocketProvider(
+      WS_URL,
+      `code-${roomId}-${currentFile.name}`,
+      ydoc
+    );
     const yText = ydoc.getText('monaco');
 
     const binding = new MonacoBinding(
@@ -144,7 +150,7 @@ const provider = new WebsocketProvider(
       provider.disconnect();
       ydoc.destroy();
     };
-  }, [roomId, currentFile.name, user.username]);
+  }, [roomId, currentFile.name, user.username, WS_URL]);
 
   const handleEditorDidMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -171,16 +177,20 @@ const provider = new WebsocketProvider(
 
   const handleLanguageChange = (newLanguage) => {
     setLanguage(newLanguage);
-    monacoRef.current.editor.setModelLanguage(editorRef.current.getModel(), newLanguage);
+    if (monacoRef.current && editorRef.current) {
+      monacoRef.current.editor.setModelLanguage(editorRef.current.getModel(), newLanguage);
+    }
   };
 
   const saveFile = () => {
-    const content = editorRef.current.getValue();
-    const updatedFiles = fileList.map(f => 
-      f.name === currentFile.name ? { ...f, content } : f
-    );
-    setFileList(updatedFiles);
-    appendToTerminal('✅ File saved\n');
+    if (editorRef.current) {
+      const content = editorRef.current.getValue();
+      const updatedFiles = fileList.map(f => 
+        f.name === currentFile.name ? { ...f, content } : f
+      );
+      setFileList(updatedFiles);
+      appendToTerminal('✅ File saved\n');
+    }
   };
 
   const runJavaScript = (code) => {
@@ -304,6 +314,7 @@ sys.stderr = StringIO()
   };
 
   const runCode = async () => {
+    if (!editorRef.current) return;
     const code = editorRef.current.getValue();
     setIsRunning(true);
     appendToTerminal(`\n🚀 Running ${language.toUpperCase()}...\n${'─'.repeat(40)}\n`);
@@ -363,6 +374,21 @@ sys.stderr = StringIO()
     setCurrentFile(fileList[0]);
   };
 
+  if (roomId === 'lobby') {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        background: '#1e1e1e',
+        color: '#888'
+      }}>
+        📝 Join a room to start coding with friends!
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: '#1e1e1e' }}>
       {/* Toolbar */}
@@ -409,7 +435,20 @@ sys.stderr = StringIO()
 
       {/* Editor */}
       <div style={{ flex: 1, minHeight: 0 }}>
-        <Editor height="100%" language={language} theme={theme} value={currentFile.content} onMount={handleEditorDidMount} options={{ automaticLayout: true, fontSize: 13, minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: 'on' }} />
+        <Editor 
+          height="100%" 
+          language={language} 
+          theme={theme} 
+          value={currentFile.content} 
+          onMount={handleEditorDidMount} 
+          options={{ 
+            automaticLayout: true, 
+            fontSize: 13, 
+            minimap: { enabled: false }, 
+            scrollBeyondLastLine: false, 
+            wordWrap: 'on' 
+          }} 
+        />
       </div>
 
       {/* Terminal - VS Code Style */}
