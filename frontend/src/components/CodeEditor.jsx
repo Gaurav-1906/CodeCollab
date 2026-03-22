@@ -104,8 +104,12 @@ const CodeEditor = ({ user, roomId }) => {
     if (!editorRef.current || !monacoRef.current) return;
 
     const ydoc = new Y.Doc();
-   const provider = new WebsocketProvider(
-  `${import.meta.env.VITE_API_URL?.replace('http', 'ws').replace('https', 'wss') || 'ws://localhost:5001'}`,
+  const WS_URL = import.meta.env.VITE_API_URL 
+  ? import.meta.env.VITE_API_URL.replace('https', 'wss').replace('http', 'ws') + ':5001'
+  : 'ws://localhost:5001';
+
+const provider = new WebsocketProvider(
+  WS_URL,
   `code-${roomId}-${currentFile.name}`,
   ydoc
 );

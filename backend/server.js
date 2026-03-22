@@ -414,13 +414,16 @@ app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// Attach Yjs WebSocket to the same server
-const yjsWss = new WebSocket.Server({ server });
+// Yjs WebSocket server on a separate port (5001)
+const yjsServer = http.createServer();
+const yjsWss = new WebSocket.Server({ server: yjsServer });
 yjsWss.on('connection', (conn, req) => {
   console.log('Yjs WebSocket client connected');
   setupWSConnection(conn, req);
 });
-console.log(`🔌 Yjs WebSocket attached to main server`);
+yjsServer.listen(5001, () => {
+  console.log(`🚀 Yjs WebSocket server running on port 5001`);
+});
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
