@@ -7,6 +7,12 @@ import FriendsList from '../components/FriendsList';
 import CodeEditor from '../components/CodeEditor';
 import { useNotification } from '../context/NotificationContext';
 
+// Socket connection helper - NO LOCALHOST FALLBACK
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
+if (!SOCKET_URL) {
+  console.error('❌ VITE_SOCKET_URL is not defined in environment variables!');
+}
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -17,6 +23,7 @@ const Dashboard = () => {
   const [socket, setSocket] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [participantCount, setParticipantCount] = useState(0);
+  const [socketReady, setSocketReady] = useState(false);
   const { showNotification } = useNotification();
 
   // Panel resizing
@@ -28,54 +35,90 @@ const Dashboard = () => {
   const [isDraggingRight, setIsDraggingRight] = useState(false);
   const containerRef = useRef(null);
 
+  // Load user data
   useEffect(() => {
     const userData = localStorage.getItem('user');
-    if (userData) setUser(JSON.parse(userData));
-    else navigate('/login');
+    if (userData) {
+      setUser(JSON.parse(userData));
+    } else {
+      navigate('/login');
+    }
   }, [navigate]);
 
+  // Initialize Socket.IO connection
   useEffect(() => {
     if (!user) return;
-    const newSocket = io(import.meta.env.VITE_API_URL);
-    setSocket(newSocket);
+
+    console.log('🔌 Connecting to Socket.IO at:', SOCKET_URL);
+    const newSocket = io(SOCKET_URL, {
+      withCredentials: true,
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
+    });
 
     newSocket.on('connect', () => {
-      console.log('Socket connected');
+      console.log('✅ Socket connected with ID:', newSocket.id);
+      setSocketReady(true);
       newSocket.emit('register-user', { userId: user._id });
       newSocket.emit('user-online', { userId: user._id });
     });
 
+    newSocket.on('connect_error', (error) => {
+      console.error('❌ Socket connection error:', error.message);
+      showNotification('Connection error. Please refresh the page.', 'error');
+    });
+
     newSocket.on('user-joined-notification', ({ username, roomId: joinedRoom }) => {
-      if (joinedRoom === roomId) showNotification(`${username} joined the room!`, 'success');
+      if (joinedRoom === roomId) {
+        showNotification(`${username} joined the room!`, 'success');
+      }
     });
 
     newSocket.on('user-left-notification', ({ username }) => {
-      if (roomId !== 'lobby') showNotification(`${username} left the room.`, 'info');
+      if (roomId !== 'lobby') {
+        showNotification(`${username} left the room.`, 'info');
+      }
     });
 
     newSocket.on('room-participants-count', ({ roomId: updatedRoomId, count }) => {
-      if (updatedRoomId === roomId) setParticipantCount(count);
+      if (updatedRoomId === roomId) {
+        setParticipantCount(count);
+      }
     });
 
-    return () => newSocket.disconnect();
-  }, [user]);
+    setSocket(newSocket);
 
+    return () => {
+      newSocket.disconnect();
+    };
+  }, [user, roomId, showNotification]);
+
+  // Join room when roomId changes
   useEffect(() => {
-    if (!socket || !user) return;
+    if (!socket || !socketReady || !user) return;
+    
     if (roomId !== 'lobby') {
+      console.log(`📡 Joining room: ${roomId}`);
       socket.emit('join-room', { roomId, userId: user._id, username: user.username });
     }
-  }, [roomId, socket, user]);
+  }, [roomId, socket, socketReady, user]);
 
   // Room persistence
   useEffect(() => {
     const savedRoom = localStorage.getItem('currentRoom');
-    if (savedRoom && savedRoom !== 'lobby') setRoomId(savedRoom);
+    if (savedRoom && savedRoom !== 'lobby') {
+      setRoomId(savedRoom);
+    }
   }, []);
 
   useEffect(() => {
-    if (roomId && roomId !== 'lobby') localStorage.setItem('currentRoom', roomId);
-    else if (roomId === 'lobby') localStorage.removeItem('currentRoom');
+    if (roomId && roomId !== 'lobby') {
+      localStorage.setItem('currentRoom', roomId);
+    } else if (roomId === 'lobby') {
+      localStorage.removeItem('currentRoom');
+    }
   }, [roomId]);
 
   const handleLogout = () => {
@@ -101,10 +144,12 @@ const Dashboard = () => {
     }
   };
 
-  const handleJoinRoom = newRoomId => setRoomId(newRoomId);
+  const handleJoinRoom = (newRoomId) => {
+    setRoomId(newRoomId);
+  };
 
   const leaveRoom = () => {
-    if (socket && roomId !== 'lobby') {
+    if (socket && socketReady && roomId !== 'lobby') {
       socket.emit('leave-room', { userId: user._id, username: user.username });
       setRoomId('lobby');
       setParticipantCount(0);
@@ -131,6 +176,7 @@ const Dashboard = () => {
       }
     }
   };
+
   useEffect(() => {
     handleResize();
     window.addEventListener('resize', handleResize);
@@ -138,7 +184,7 @@ const Dashboard = () => {
   }, []);
 
   useEffect(() => {
-    const handleMouseMove = e => {
+    const handleMouseMove = (e) => {
       if (isDraggingLeft && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const newWidth = e.clientX - rect.left;
@@ -156,16 +202,19 @@ const Dashboard = () => {
         else setIsRightOpen(true);
       }
     };
+    
     const handleMouseUp = () => {
       setIsDraggingLeft(false);
       setIsDraggingRight(false);
     };
+    
     if (isDraggingLeft || isDraggingRight) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     }
+    
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -183,6 +232,7 @@ const Dashboard = () => {
       setIsLeftOpen(true);
     }
   };
+  
   const toggleRightPanel = () => {
     if (isRightOpen) {
       setRightWidth(0);
@@ -192,12 +242,19 @@ const Dashboard = () => {
       setIsRightOpen(true);
     }
   };
+  
   const refreshFriends = () => {
     setRefreshKey(prev => prev + 1);
     showNotification('Refreshing friends list...', 'info');
   };
 
-  if (!user) return <div style={{ height: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>Loading...</div>;
+  if (!user) {
+    return (
+      <div style={{ height: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div
@@ -254,7 +311,7 @@ const Dashboard = () => {
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(roomId);
-                  alert('Room code copied!');
+                  showNotification('Room code copied!', 'success');
                 }}
                 style={{
                   background: '#2c2c2c',
