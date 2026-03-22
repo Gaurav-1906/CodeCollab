@@ -21,26 +21,58 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ===== CORS Configuration =====
-// Get allowed origins from environment variable
-const allowedOrigins = process.env.CLIENT_ORIGIN 
+// Get static allowed origins from environment variable
+const staticAllowedOrigins = process.env.CLIENT_ORIGIN 
   ? process.env.CLIENT_ORIGIN.split(',').map(origin => origin.trim()) 
   : ['http://localhost:5173'];
 
-console.log('✅ Allowed CORS origins:', allowedOrigins);
+// Function to check if origin is allowed
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  
+  // Check static allowed origins
+  if (staticAllowedOrigins.includes(origin)) {
+    console.log(`✅ Static origin allowed: ${origin}`);
+    return true;
+  }
+  
+  // Allow all Vercel preview deployments (any subdomain of vercel.app)
+  if (origin.match(/^https:\/\/.*\.vercel\.app$/)) {
+    console.log(`✅ Vercel preview allowed: ${origin}`);
+    return true;
+  }
+  
+  // Allow localhost for development
+  if (origin.match(/^http:\/\/localhost:\d+$/)) {
+    console.log(`✅ Localhost allowed: ${origin}`);
+    return true;
+  }
+  
+  console.log(`❌ Origin blocked: ${origin}`);
+  return false;
+};
 
-// Security middleware
-app.use(helmet());
+console.log('=================================');
+console.log('🔧 CORS Configuration:');
+console.log(`📋 Static allowed origins:`, staticAllowedOrigins);
+console.log(`🌐 Vercel preview URLs: All *.vercel.app allowed`);
+console.log(`💻 Localhost: Allowed for development`);
+console.log('=================================');
+
+// Security middleware (with CORS-friendly settings)
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginOpenerPolicy: { policy: "unsafe-none" },
+  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: false
+}));
 
 // Express CORS with dynamic origin
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps, curl)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.includes(origin)) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      console.log(`❌ CORS blocked origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -191,17 +223,16 @@ app.post('/api/execute', async (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// Socket.io setup with fixed CORS
+// Socket.io setup with dynamic CORS
 // -------------------------------------------------------------------
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl)
       if (!origin) return callback(null, true);
       
-      if (allowedOrigins.includes(origin)) {
+      if (isOriginAllowed(origin)) {
         callback(null, true);
       } else {
         console.log(`❌ Socket.IO CORS blocked origin: ${origin}`);
@@ -210,9 +241,9 @@ const io = new Server(server, {
     },
     methods: ['GET', 'POST'],
     credentials: true,
-    transports: ['websocket', 'polling'] // Enable both transports for better compatibility
+    transports: ['websocket', 'polling']
   },
-  allowEIO3: true // Allow Engine.IO v3 clients for better compatibility
+  allowEIO3: true
 });
 
 // Store io and redis in app for access in routes
@@ -520,7 +551,8 @@ server.listen(PORT, () => {
 ║  🔌 Socket.IO: Ready                                     ║
 ║  📦 MongoDB: Connected                                   ║
 ║  🔥 Redis: Connected                                     ║
-║  🌐 Allowed Origins: ${allowedOrigins.length} origin(s)   ║
+║  🌐 Allowed Origins: ${staticAllowedOrigins.length} origin(s)   ║
+║  🌐 Vercel Previews: All *.vercel.app allowed            ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
   `);
