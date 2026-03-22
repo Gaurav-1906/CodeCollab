@@ -20,27 +20,51 @@ const app = express();
 // Enable trust proxy for Render
 app.set('trust proxy', 1);
 
+// ===== CORS Configuration =====
+// Get allowed origins from environment variable
+const allowedOrigins = process.env.CLIENT_ORIGIN 
+  ? process.env.CLIENT_ORIGIN.split(',').map(origin => origin.trim()) 
+  : ['http://localhost:5173'];
+
+console.log('✅ Allowed CORS origins:', allowedOrigins);
+
+// Security middleware
 app.use(helmet());
-const allowedOrigins = process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(',') : ['http://localhost:5173'];
+
+// Express CORS with dynamic origin
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow requests with no origin (like mobile apps, curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.log(`❌ CORS blocked origin: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 app.use(express.json());
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
+// Rate limiting
+const limiter = rateLimit({ 
+  windowMs: 15 * 60 * 1000, 
+  max: 100,
+  message: 'Too many requests from this IP, please try again later.'
+});
 app.use('/api', limiter);
 
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     message: 'CodeCollab API is running',
     version: '1.0.0',
+    status: 'healthy',
     endpoints: {
       auth: {
         register: 'POST /api/auth/register',
@@ -51,14 +75,18 @@ app.get('/', (req, res) => {
       users: {
         search: 'GET /api/users/search?q=username',
         friends: 'GET /api/users/friends'
+      },
+      code: {
+        execute: 'POST /api/execute'
       }
     }
   });
 });
 
+// Auth routes
 app.use('/api/auth', authRoutes);
 
-// Friend routes
+// Friend search endpoint
 app.get('/api/users/search', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -69,16 +97,20 @@ app.get('/api/users/search', async (req, res) => {
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const { q } = req.query;
+    
     if (!q || q.trim() === '') {
       return res.status(400).json({ message: 'Please enter a username' });
     }
+    
     const user = await User.findOne({
       username: { $regex: `^${q}$`, $options: 'i' },
       _id: { $ne: decoded.id }
     }).select('-password');
+    
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+    
     res.json(user);
   } catch (error) {
     console.error('Search error:', error);
@@ -86,6 +118,7 @@ app.get('/api/users/search', async (req, res) => {
   }
 });
 
+// Get friends list endpoint
 app.get('/api/users/friends', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -95,10 +128,12 @@ app.get('/api/users/friends', async (req, res) => {
     const token = authHeader.split(' ')[1];
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
     const user = await User.findById(decoded.id).populate('friends', '-password');
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
+    
     res.json(user.friends || []);
   } catch (error) {
     console.error('Friends error:', error);
@@ -156,27 +191,43 @@ app.post('/api/execute', async (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// Socket.io setup
+// Socket.io setup with fixed CORS
 // -------------------------------------------------------------------
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.log(`❌ Socket.IO CORS blocked origin: ${origin}`);
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
     methods: ['GET', 'POST'],
-    credentials: true
-  }
+    credentials: true,
+    transports: ['websocket', 'polling'] // Enable both transports for better compatibility
+  },
+  allowEIO3: true // Allow Engine.IO v3 clients for better compatibility
 });
 
+// Store io and redis in app for access in routes
 app.set('io', io);
 app.set('redis', redisClient);
 
-const userSockets = new Map();
-const roomParticipants = new Map();
+// Socket.io data stores
+const userSockets = new Map(); // userId -> socketId
+const roomParticipants = new Map(); // roomId -> Set of userIds
 
+// Socket.io connection handler
 io.on('connection', (socket) => {
-  console.log('New client connected:', socket.id);
+  console.log('✅ New client connected:', socket.id);
 
+  // Register user
   socket.on('register-user', ({ userId }) => {
     socket.data.userId = userId;
     userSockets.set(userId, socket.id);
@@ -184,23 +235,30 @@ io.on('connection', (socket) => {
     console.log(`📱 Total connected users: ${userSockets.size}`);
   });
 
+  // User online status
   socket.on('user-online', async ({ userId }) => {
-    await User.findByIdAndUpdate(userId, { status: 'online', lastSeen: Date.now() });
-    const user = await User.findById(userId).populate('friends');
-    const currentRoom = socket.data.currentRoom || null;
-    user.friends.forEach(friend => {
-      const friendSocketId = userSockets.get(friend._id.toString());
-      if (friendSocketId) {
-        io.to(friendSocketId).emit('friend-status-changed', {
-          userId,
-          status: 'online',
-          username: user.username,
-          currentRoom
-        });
-      }
-    });
+    try {
+      await User.findByIdAndUpdate(userId, { status: 'online', lastSeen: Date.now() });
+      const user = await User.findById(userId).populate('friends');
+      const currentRoom = socket.data.currentRoom || null;
+      
+      user.friends.forEach(friend => {
+        const friendSocketId = userSockets.get(friend._id.toString());
+        if (friendSocketId) {
+          io.to(friendSocketId).emit('friend-status-changed', {
+            userId,
+            status: 'online',
+            username: user.username,
+            currentRoom
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Error updating online status:', error);
+    }
   });
 
+  // Send friend request
   socket.on('send-friend-request', ({ to, from, fromUsername }) => {
     const targetSocketId = userSockets.get(to);
     if (targetSocketId) {
@@ -210,28 +268,40 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Accept friend request
   socket.on('accept-friend-request', async ({ to, from, fromUsername }) => {
     try {
       await User.findByIdAndUpdate(from, { $addToSet: { friends: to } });
       await User.findByIdAndUpdate(to, { $addToSet: { friends: from } });
+      
       const friend = await User.findById(to).select('-password');
       const senderSocketId = userSockets.get(from);
-      if (senderSocketId) io.to(senderSocketId).emit('friend-request-accepted', { friend });
+      if (senderSocketId) {
+        io.to(senderSocketId).emit('friend-request-accepted', { friend });
+      }
+      
       const sender = await User.findById(from).select('-password');
       const targetSocketId = userSockets.get(to);
-      if (targetSocketId) io.to(targetSocketId).emit('friend-request-accepted', { friend: sender });
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('friend-request-accepted', { friend: sender });
+      }
     } catch (err) {
       console.error('Accept friend error:', err);
     }
   });
 
+  // Reject friend request
   socket.on('reject-friend-request', ({ to, from }) => {
     const targetSocketId = userSockets.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('friend-request-rejected', { from });
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('friend-request-rejected', { from });
+    }
   });
 
+  // Join room
   socket.on('join-room', async ({ roomId, userId, username }) => {
     const previousRoom = socket.data.currentRoom;
+    
     if (previousRoom && previousRoom !== roomId) {
       socket.leave(previousRoom);
       if (roomParticipants.has(previousRoom)) {
@@ -250,7 +320,9 @@ io.on('connection', (socket) => {
 
     console.log(`${username} joined room: ${roomId}`);
 
-    if (!roomParticipants.has(roomId)) roomParticipants.set(roomId, new Set());
+    if (!roomParticipants.has(roomId)) {
+      roomParticipants.set(roomId, new Set());
+    }
     roomParticipants.get(roomId).add(userId);
     const count = roomParticipants.get(roomId).size;
     io.to(roomId).emit('room-participants-count', { roomId, count });
@@ -259,20 +331,25 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('user-joined-notification', { username, roomId });
     io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
 
-    const user = await User.findById(userId).populate('friends');
-    user.friends.forEach(friend => {
-      const friendSocketId = userSockets.get(friend._id.toString());
-      if (friendSocketId) {
-        io.to(friendSocketId).emit('friend-status-changed', {
-          userId,
-          status: 'online',
-          username: user.username,
-          currentRoom: roomId
-        });
-      }
-    });
+    try {
+      const user = await User.findById(userId).populate('friends');
+      user.friends.forEach(friend => {
+        const friendSocketId = userSockets.get(friend._id.toString());
+        if (friendSocketId) {
+          io.to(friendSocketId).emit('friend-status-changed', {
+            userId,
+            status: 'online',
+            username: user.username,
+            currentRoom: roomId
+          });
+        }
+      });
+    } catch (error) {
+      console.error('Error updating friend status:', error);
+    }
   });
 
+  // Request participants count
   socket.on('request-participants-count', ({ roomId }) => {
     if (roomParticipants.has(roomId)) {
       const count = roomParticipants.get(roomId).size;
@@ -280,6 +357,7 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Leave room
   socket.on('leave-room', async ({ userId, username }) => {
     const currentRoom = socket.data.currentRoom;
     if (currentRoom) {
@@ -296,31 +374,41 @@ io.on('connection', (socket) => {
       io.to(`chat-${currentRoom}`).emit('user-left-notification', { username });
       console.log(`${username} left room: ${currentRoom}`);
 
-      const user = await User.findById(userId).populate('friends');
-      user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', {
-            userId,
-            status: 'online',
-            username: user.username,
-            currentRoom: null
-          });
-        }
-      });
+      try {
+        const user = await User.findById(userId).populate('friends');
+        user.friends.forEach(friend => {
+          const friendSocketId = userSockets.get(friend._id.toString());
+          if (friendSocketId) {
+            io.to(friendSocketId).emit('friend-status-changed', {
+              userId,
+              status: 'online',
+              username: user.username,
+              currentRoom: null
+            });
+          }
+        });
+      } catch (error) {
+        console.error('Error updating friend status on leave:', error);
+      }
     }
   });
 
+  // WebRTC signaling
   socket.on('send-signal', ({ signal, to, from, username }) => {
     const targetSocketId = userSockets.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('receive-call', { signal, from, username });
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('receive-call', { signal, from, username });
+    }
   });
 
   socket.on('return-signal', ({ signal, to }) => {
     const targetSocketId = userSockets.get(to);
-    if (targetSocketId) io.to(targetSocketId).emit('signal-returned', { signal, from: socket.id });
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('signal-returned', { signal, from: socket.id });
+    }
   });
 
+  // Chat functionality
   socket.on('join-chat', ({ roomId, userId, username }) => {
     const chatRoom = `chat-${roomId}`;
     socket.join(chatRoom);
@@ -337,6 +425,7 @@ io.on('connection', (socket) => {
     socket.to(chatRoom).emit('user-typing', { username, isTyping });
   });
 
+  // Invite functionality
   socket.on('send-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} invited user ${to} to room: ${room}`);
     const targetSocketId = userSockets.get(to);
@@ -364,61 +453,88 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Disconnect handler
   socket.on('disconnect', async () => {
     const userId = socket.data.userId;
     if (userId) {
-      await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
-      const user = await User.findById(userId).populate('friends');
-      user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', { userId, status: 'offline', username: user.username });
-        }
-      });
+      try {
+        await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
+        const user = await User.findById(userId).populate('friends');
+        
+        user.friends.forEach(friend => {
+          const friendSocketId = userSockets.get(friend._id.toString());
+          if (friendSocketId) {
+            io.to(friendSocketId).emit('friend-status-changed', { 
+              userId, 
+              status: 'offline', 
+              username: user.username 
+            });
+          }
+        });
+      } catch (error) {
+        console.error('Error updating offline status:', error);
+      }
+      
       userSockets.delete(userId);
     }
-    if (socket.data.roomId && socket.data.userId) {
-      if (roomParticipants.has(socket.data.roomId)) {
-        roomParticipants.get(socket.data.roomId).delete(socket.data.userId);
-        const count = roomParticipants.get(socket.data.roomId).size;
-        io.to(socket.data.roomId).emit('room-participants-count', { roomId: socket.data.roomId, count });
+    
+    if (socket.data.currentRoom && socket.data.userId) {
+      const roomId = socket.data.currentRoom;
+      if (roomParticipants.has(roomId)) {
+        roomParticipants.get(roomId).delete(socket.data.userId);
+        const count = roomParticipants.get(roomId).size;
+        io.to(roomId).emit('room-participants-count', { roomId, count });
       }
-      socket.to(socket.data.roomId).emit('user-left', socket.data.userId);
-      io.to(`chat-${socket.data.roomId}`).emit('user-left-notification', { username: socket.data.username });
+      socket.to(roomId).emit('user-left', socket.data.userId);
+      io.to(`chat-${roomId}`).emit('user-left-notification', { username: socket.data.username });
     }
-    console.log('Client disconnected:', socket.id);
+    
+    console.log('❌ Client disconnected:', socket.id);
+    console.log(`📱 Remaining connected users: ${userSockets.size}`);
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('❌ Error:', err.stack);
   res.status(500).json({
     message: 'Something went wrong!',
     error: process.env.NODE_ENV === 'development' ? err.message : {}
   });
 });
 
+// 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
+// Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📦 MongoDB: Connected`);
-  console.log(`🔥 Redis: Connected`);
-  console.log(`🔌 Socket.io: Ready`);
-  console.log(`📚 API available at http://localhost:${PORT}`);
+  console.log(`
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║  🚀 CodeCollab Server Started Successfully!             ║
+║                                                          ║
+║  📡 Server: http://localhost:${PORT}                      ║
+║  🔌 Socket.IO: Ready                                     ║
+║  📦 MongoDB: Connected                                   ║
+║  🔥 Redis: Connected                                     ║
+║  🌐 Allowed Origins: ${allowedOrigins.length} origin(s)   ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+  `);
 });
 
+// Graceful shutdown
 process.on('unhandledRejection', (err) => {
-  console.log('UNHANDLED REJECTION! Shutting down...');
-  console.log(err.name, err.message);
+  console.error('❌ UNHANDLED REJECTION! Shutting down...');
+  console.error(err.name, err.message);
   server.close(() => process.exit(1));
 });
+
 process.on('uncaughtException', (err) => {
-  console.log('UNCAUGHT EXCEPTION! Shutting down...');
-  console.log(err.name, err.message);
+  console.error('❌ UNCAUGHT EXCEPTION! Shutting down...');
+  console.error(err.name, err.message);
   process.exit(1);
 });
