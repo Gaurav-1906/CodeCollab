@@ -103,10 +103,10 @@ const CodeEditor = ({ user, roomId }) => {
 
     const ydoc = new Y.Doc();
     const provider = new WebsocketProvider(
-      'ws://localhost:5001',
-      `code-${roomId}-${currentFile.name}`,
-      ydoc
-    );
+  `${import.meta.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:5001'}`,
+  `code-${roomId}-${currentFile.name}`,
+  ydoc
+);
     const yText = ydoc.getText('monaco');
 
     const binding = new MonacoBinding(
