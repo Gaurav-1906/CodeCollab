@@ -7,13 +7,33 @@ const Chat = ({ user, roomId }) => {
   const [typingUsers, setTypingUsers] = useState([]);
   const messagesEndRef = useRef(null);
   const socketRef = useRef();
+  const typingTimeoutRef = useRef();
+
+  // Use environment variable for Socket URL
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://codecollab-backend-omu2.onrender.com';
 
   useEffect(() => {
-    socketRef.current = io('http://localhost:5000');
+    if (!user || !roomId || roomId === 'lobby') return;
 
-    socketRef.current.emit('join-chat', { roomId, userId: user._id, username: user.username });
+    console.log('💬 Chat mounting for room:', roomId);
+    
+    // Connect to socket
+    socketRef.current = io(SOCKET_URL, {
+      withCredentials: true,
+      transports: ['websocket', 'polling']
+    });
+
+    socketRef.current.on('connect', () => {
+      console.log('✅ Chat socket connected');
+      socketRef.current.emit('join-chat', { 
+        roomId, 
+        userId: user._id, 
+        username: user.username 
+      });
+    });
 
     socketRef.current.on('chat-message', (message) => {
+      console.log('📨 New message:', message);
       setMessages(prev => [...prev, message]);
     });
 
@@ -52,16 +72,22 @@ const Chat = ({ user, roomId }) => {
     });
 
     return () => {
-      socketRef.current.disconnect();
+      console.log('💬 Chat unmounting');
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
     };
-  }, [roomId, user._id, user.username]);
+  }, [roomId, user?._id, user?.username]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const sendMessage = () => {
-    if (inputMessage.trim()) {
+    if (inputMessage.trim() && socketRef.current) {
       const message = {
         id: Date.now(),
         text: inputMessage,
@@ -72,25 +98,60 @@ const Chat = ({ user, roomId }) => {
       
       socketRef.current.emit('chat-message', { roomId, message });
       setInputMessage('');
-      socketRef.current.emit('typing', { roomId, isTyping: false });
+      
+      // Stop typing indicator after sending
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      socketRef.current.emit('typing', { roomId, isTyping: false, username: user.username });
     }
   };
 
   const handleTyping = (e) => {
     setInputMessage(e.target.value);
     
-    clearTimeout(window.typingTimeout);
-    window.typingTimeout = setTimeout(() => {
-      socketRef.current.emit('typing', { roomId, isTyping: false });
-    }, 2000);
+    if (!socketRef.current) return;
     
+    // Clear previous timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Send typing started
     socketRef.current.emit('typing', { roomId, isTyping: true, username: user.username });
+    
+    // Set timeout to stop typing after 2 seconds of no input
+    typingTimeoutRef.current = setTimeout(() => {
+      socketRef.current.emit('typing', { roomId, isTyping: false, username: user.username });
+    }, 2000);
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
   };
 
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
+
+  if (roomId === 'lobby') {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        background: '#f5f5f5',
+        color: '#888'
+      }}>
+        💬 Join a room to start chatting
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -128,16 +189,17 @@ const Chat = ({ user, roomId }) => {
                 </div>
               );
             }
+            const isOwnMessage = msg.userId === user._id;
             return (
               <div
                 key={msg.id}
                 style={{
                   display: 'flex',
                   marginBottom: '12px',
-                  justifyContent: msg.userId === user._id ? 'flex-end' : 'flex-start'
+                  justifyContent: isOwnMessage ? 'flex-end' : 'flex-start'
                 }}
               >
-                {msg.userId !== user._id && (
+                {!isOwnMessage && (
                   <div style={{
                     width: '32px',
                     height: '32px',
@@ -151,19 +213,19 @@ const Chat = ({ user, roomId }) => {
                     marginRight: '8px',
                     flexShrink: 0
                   }}>
-                    {msg.username.charAt(0).toUpperCase()}
+                    {msg.username?.charAt(0).toUpperCase() || '?'}
                   </div>
                 )}
                 
                 <div style={{
                   maxWidth: '70%',
-                  background: msg.userId === user._id ? '#4CAF50' : 'white',
-                  color: msg.userId === user._id ? 'white' : '#333',
+                  background: isOwnMessage ? '#4CAF50' : 'white',
+                  color: isOwnMessage ? 'white' : '#333',
                   padding: '8px 12px',
-                  borderRadius: msg.userId === user._id ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+                  borderRadius: isOwnMessage ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
                   boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
                 }}>
-                  {msg.userId !== user._id && (
+                  {!isOwnMessage && (
                     <div style={{
                       fontSize: '11px',
                       fontWeight: 'bold',
@@ -184,7 +246,7 @@ const Chat = ({ user, roomId }) => {
                   </div>
                 </div>
                 
-                {msg.userId === user._id && (
+                {isOwnMessage && (
                   <div style={{
                     width: '32px',
                     height: '32px',
@@ -198,7 +260,7 @@ const Chat = ({ user, roomId }) => {
                     marginLeft: '8px',
                     flexShrink: 0
                   }}>
-                    {user.username.charAt(0).toUpperCase()}
+                    {user.username?.charAt(0).toUpperCase() || '?'}
                   </div>
                 )}
               </div>
@@ -231,7 +293,7 @@ const Chat = ({ user, roomId }) => {
           type="text"
           value={inputMessage}
           onChange={handleTyping}
-          onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+          onKeyPress={handleKeyPress}
           placeholder="Type a message..."
           style={{
             flex: 1,

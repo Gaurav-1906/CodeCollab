@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 
-// Browser polyfill for simple-peer (fixes "process.nextTick is not a function")
+// Browser polyfill for simple-peer
 window.global = window;
 window.process = window.process || { nextTick: (fn) => setTimeout(fn, 0) };
 
@@ -16,30 +16,44 @@ const GameChat = ({ user, roomId }) => {
   const userVideoRef = useRef();
   const peersRef = useRef({});
   const mountedRef = useRef(true);
-  const reconnectTimeout = useRef();
+
+  // Use environment variable for Socket URL
+  const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://codecollab-backend-omu2.onrender.com';
 
   useEffect(() => {
     mountedRef.current = true;
-    if (roomId === 'lobby') return;
+    if (roomId === 'lobby') {
+      setConnectionStatus('Join a room to start video call');
+      return;
+    }
 
     console.log('🎥 GameChat mounting for room:', roomId);
     setConnectionStatus('Requesting camera & mic...');
 
-    socketRef.current = io(import.meta.env.VITE_API_URL);
+    // Connect to socket
+    socketRef.current = io(SOCKET_URL, {
+      withCredentials: true,
+      transports: ['websocket', 'polling']
+    });
 
-    // Try to get both video and audio
+    // Get media stream
     navigator.mediaDevices.getUserMedia({ audio: true, video: true })
       .then(mediaStream => {
         if (!mountedRef.current) return;
         console.log('✅ Got media stream');
         setStream(mediaStream);
-        if (userVideoRef.current) userVideoRef.current.srcObject = mediaStream;
+        if (userVideoRef.current) {
+          userVideoRef.current.srcObject = mediaStream;
+        }
         setConnectionStatus('Camera active – joining room...');
+        
+        // Join room after getting stream
         socketRef.current.emit('join-room', {
           roomId,
           userId: user._id,
           username: user.username,
         });
+        
         setTimeout(() => {
           if (mountedRef.current) setConnectionStatus('Waiting for others...');
         }, 1000);
@@ -56,11 +70,12 @@ const GameChat = ({ user, roomId }) => {
         });
       });
 
+    // Socket event handlers
     socketRef.current.on('user-joined', ({ userId, username }) => {
       if (!mountedRef.current) return;
       console.log('👤 User joined:', username);
       setConnectionStatus(`${username} joined – connecting...`);
-      if (!peersRef.current[userId]) {
+      if (!peersRef.current[userId] && socketRef.current) {
         console.log('📞 Creating peer for:', username);
         const peer = createPeer(userId, socketRef.current.id, stream);
         peersRef.current[userId] = { peer, username, peerId: userId };
@@ -100,12 +115,15 @@ const GameChat = ({ user, roomId }) => {
     return () => {
       mountedRef.current = false;
       console.log('🎥 GameChat unmounting');
-      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
-      if (socketRef.current) socketRef.current.disconnect();
-      if (stream) stream.getTracks().forEach(track => track.stop());
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
       Object.values(peersRef.current).forEach(({ peer }) => peer.destroy());
     };
-  }, [roomId, user._id, user.username]);
+  }, [roomId, user?._id, user?.username]);
 
   const createPeer = (targetUserId, callerId, stream) => {
     const peer = new Peer({
@@ -116,17 +134,20 @@ const GameChat = ({ user, roomId }) => {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       },
     });
 
     peer.on('signal', signal => {
-      socketRef.current.emit('send-signal', {
-        signal,
-        to: targetUserId,
-        from: callerId,
-        username: user.username,
-      });
+      if (socketRef.current) {
+        socketRef.current.emit('send-signal', {
+          signal,
+          to: targetUserId,
+          from: callerId,
+          username: user?.username,
+        });
+      }
     });
 
     peer.on('stream', remoteStream => {
@@ -140,19 +161,10 @@ const GameChat = ({ user, roomId }) => {
 
     peer.on('connect', () => {
       console.log('✅ Peer connected to:', targetUserId);
-      setConnectionStatus(`Connected to ${peersRef.current[targetUserId]?.username || 'user'}`);
     });
 
     peer.on('error', err => {
       console.error('Peer error:', err);
-      setConnectionStatus('Connection error – retrying...');
-      reconnectTimeout.current = setTimeout(() => {
-        if (mountedRef.current && !peersRef.current[targetUserId]) {
-          const newPeer = createPeer(targetUserId, callerId, stream);
-          peersRef.current[targetUserId] = { peer: newPeer, username: peersRef.current[targetUserId]?.username || 'user', peerId: targetUserId };
-          setPeers(Object.values(peersRef.current));
-        }
-      }, 2000);
     });
 
     return peer;
@@ -167,12 +179,15 @@ const GameChat = ({ user, roomId }) => {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       },
     });
 
     peer.on('signal', signal => {
-      socketRef.current.emit('return-signal', { signal, to: callerId });
+      if (socketRef.current) {
+        socketRef.current.emit('return-signal', { signal, to: callerId });
+      }
     });
 
     peer.on('stream', remoteStream => {
@@ -186,12 +201,10 @@ const GameChat = ({ user, roomId }) => {
 
     peer.on('connect', () => {
       console.log('✅ Peer connected to:', callerId);
-      setConnectionStatus(`Connected to ${peersRef.current[callerId]?.username || 'user'}`);
     });
 
     peer.on('error', err => {
       console.error('Peer error:', err);
-      setConnectionStatus('Connection error – retrying...');
     });
 
     peer.signal(incomingSignal);
@@ -212,20 +225,40 @@ const GameChat = ({ user, roomId }) => {
     }
   };
 
-  const getInitials = name => name.charAt(0).toUpperCase();
-  const getAvatarColor = username => {
+  const getInitials = (name) => name?.charAt(0).toUpperCase() || '?';
+  
+  const getAvatarColor = (username) => {
     const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'];
     let hash = 0;
-    for (let i = 0; i < username.length; i++) hash = ((hash << 5) - hash) + username.charCodeAt(i);
+    if (!username) return colors[0];
+    for (let i = 0; i < username.length; i++) {
+      hash = ((hash << 5) - hash) + username.charCodeAt(i);
+    }
     return colors[Math.abs(hash) % colors.length];
   };
+
+  if (roomId === 'lobby') {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        background: '#1e1e1e',
+        color: '#888'
+      }}>
+        🎥 Join a room to start video call
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#1e1e1e' }}>
       <div
         style={{
           padding: '6px',
-          background: connectionStatus.includes('Error') ? '#f44336' : connectionStatus.includes('Connected') ? '#4CAF50' : '#ff9800',
+          background: connectionStatus.includes('Error') ? '#f44336' : 
+                     connectionStatus.includes('Connected') ? '#4CAF50' : '#ff9800',
           color: 'white',
           textAlign: 'center',
           fontSize: '11px',
@@ -276,7 +309,7 @@ const GameChat = ({ user, roomId }) => {
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                background: getAvatarColor(user.username),
+                background: getAvatarColor(user?.username),
                 color: 'white',
               }}
             >
@@ -293,10 +326,10 @@ const GameChat = ({ user, roomId }) => {
                   fontWeight: 'bold',
                 }}
               >
-                {getInitials(user.username)}
+                {getInitials(user?.username)}
               </div>
               <div style={{ marginTop: '10px', fontSize: '14px', fontWeight: 'bold' }}>
-                {user.username}
+                {user?.username || 'You'}
               </div>
               <div style={{ fontSize: '12px', opacity: 0.8, marginTop: '4px' }}>Camera off</div>
             </div>
@@ -316,7 +349,7 @@ const GameChat = ({ user, roomId }) => {
               gap: '6px',
             }}
           >
-            <span>{user.username} (You)</span>
+            <span>{user?.username || 'You'} (You)</span>
             {!audioEnabled && <span>🔇</span>}
           </div>
         </div>

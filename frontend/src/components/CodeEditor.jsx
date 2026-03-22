@@ -28,7 +28,9 @@ const CodeEditor = ({ user, roomId }) => {
   const terminalInputRef = useRef(null);
 
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-  const WS_URL = API_URL.replace('http', 'ws').replace('https', 'wss');
+ const WS_URL = import.meta.env.VITE_API_URL 
+  ? import.meta.env.VITE_API_URL.replace('https', 'wss').replace('http', 'ws') 
+  : 'wss://codecollab-backend-omu2.onrender.com';
 
   // Load Pyodide for Python execution
   useEffect(() => {
@@ -104,10 +106,6 @@ const CodeEditor = ({ user, roomId }) => {
     if (!editorRef.current || !monacoRef.current) return;
 
     const ydoc = new Y.Doc();
-  const WS_URL = import.meta.env.VITE_API_URL 
-  ? import.meta.env.VITE_API_URL.replace('https', 'wss').replace('http', 'ws') + ':5001'
-  : 'ws://localhost:5001';
-
 const provider = new WebsocketProvider(
   WS_URL,
   `code-${roomId}-${currentFile.name}`,
