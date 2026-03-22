@@ -21,12 +21,14 @@ const CodeEditor = ({ user, roomId }) => {
   const [terminalInput, setTerminalInput] = useState('');
   const [terminalWaiting, setTerminalWaiting] = useState(false);
   const [terminalResolve, setTerminalResolve] = useState(null);
-  const [inputBuffer, setInputBuffer] = useState('');
   const [collaborators, setCollaborators] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [pyodide, setPyodide] = useState(null);
   const terminalEndRef = useRef(null);
   const terminalInputRef = useRef(null);
+
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  const WS_URL = API_URL.replace('http', 'ws').replace('https', 'wss');
 
   // Load Pyodide for Python execution
   useEffect(() => {
@@ -103,10 +105,10 @@ const CodeEditor = ({ user, roomId }) => {
 
     const ydoc = new Y.Doc();
     const provider = new WebsocketProvider(
-  `${import.meta.env.VITE_API_URL?.replace('http', 'ws') || 'ws://localhost:5001'}`,
-  `code-${roomId}-${currentFile.name}`,
-  ydoc
-);
+      `${WS_URL}`,
+      `code-${roomId}-${currentFile.name}`,
+      ydoc
+    );
     const yText = ydoc.getText('monaco');
 
     const binding = new MonacoBinding(
@@ -236,13 +238,12 @@ sys.stderr = StringIO()
     }
   };
 
-  // C++ execution that properly handles multiple inputs
   const runCpp = async (code) => {
     try {
       const needsInput = code.includes('cin') || code.includes('scanf');
       
       if (!needsInput) {
-        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/execute`, {
+        const response = await fetch(`${API_URL}/api/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, language: 'cpp', input: '' })
@@ -251,20 +252,12 @@ sys.stderr = StringIO()
         return data.output || '✅ Done';
       }
       
-      // For programs that need input, we need to simulate interactive input
-      // First, run the program to get prompts
-      let allOutput = '';
-      let currentInput = '';
-      
-      // Since JDoodle requires all input at once, we need to collect all inputs first
-      // We'll parse the program to find all prompts
-      // But simpler: ask user for all inputs at once
       appendToTerminal('📝 Enter all inputs (separate with spaces):\n');
       const allInputs = await waitForTerminalInput();
       
       appendToTerminal('⏳ Running...\n');
       
-      const response = await fetch('http://localhost:5000/api/execute', {
+      const response = await fetch(`${API_URL}/api/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, language: 'cpp', input: allInputs })
@@ -282,7 +275,7 @@ sys.stderr = StringIO()
       const needsInput = code.includes('Scanner') || code.includes('System.in');
       
       if (!needsInput) {
-        const response = await fetch('http://localhost:5000/api/execute', {
+        const response = await fetch(`${API_URL}/api/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, language: 'java', input: '' })
@@ -296,7 +289,7 @@ sys.stderr = StringIO()
       
       appendToTerminal('⏳ Running...\n');
       
-      const response = await fetch('http://localhost:5000/api/execute', {
+      const response = await fetch(`${API_URL}/api/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, language: 'java', input: allInputs })
