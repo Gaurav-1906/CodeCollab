@@ -45,8 +45,16 @@ const Register = () => {
     setError('');
     setLoading(true);
 
+    const apiUrl = import.meta.env.VITE_API_URL;
+    console.log('[v0] API URL:', apiUrl);
+    console.log('[v0] Attempting registration with:', { username: formData.username, email: formData.email });
+
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/register`, {
+      if (!apiUrl) {
+        throw new Error('API URL not configured. Please set VITE_API_URL environment variable.');
+      }
+
+      const response = await fetch(`${apiUrl}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -54,7 +62,9 @@ const Register = () => {
         body: JSON.stringify(formData)
       });
 
+      console.log('[v0] Response status:', response.status);
       const data = await response.json();
+      console.log('[v0] Response data:', data);
 
       if (!response.ok) {
         throw new Error(data.message || 'Registration failed');
@@ -65,7 +75,12 @@ const Register = () => {
       navigate('/dashboard');
       
     } catch (err) {
-      setError(err.message);
+      console.error('[v0] Registration error:', err);
+      if (err.message === 'Failed to fetch') {
+        setError('Cannot connect to server. This is likely a CORS issue - the backend needs to allow requests from this domain, or the server may be starting up (wait 30-60s for Render free tier).');
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }

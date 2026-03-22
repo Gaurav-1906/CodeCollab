@@ -42,9 +42,27 @@ const isOriginAllowed = (origin) => {
     return true;
   }
   
+  // Allow v0.dev preview URLs
+  if (origin.match(/^https:\/\/.*v0\.dev$/) || origin.match(/^https:\/\/.*v0\.app$/)) {
+    console.log(`✅ v0 preview allowed: ${origin}`);
+    return true;
+  }
+  
+  // Allow vusercontent blob URLs (v0 preview)
+  if (origin.match(/^https:\/\/.*vusercontent\.net$/)) {
+    console.log(`✅ vusercontent allowed: ${origin}`);
+    return true;
+  }
+  
   // Allow localhost for development
   if (origin.match(/^http:\/\/localhost:\d+$/)) {
     console.log(`✅ Localhost allowed: ${origin}`);
+    return true;
+  }
+  
+  // In development mode, allow all origins
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`✅ Development mode - allowing: ${origin}`);
     return true;
   }
   
