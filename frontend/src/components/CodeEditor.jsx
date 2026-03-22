@@ -242,7 +242,7 @@ sys.stderr = StringIO()
       const needsInput = code.includes('cin') || code.includes('scanf');
       
       if (!needsInput) {
-        const response = await fetch('http://localhost:5000/api/execute', {
+        const response = await fetch(`${import.meta.env.VITE_API_URL}/api/execute`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, language: 'cpp', input: '' })

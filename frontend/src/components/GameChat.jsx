@@ -25,7 +25,7 @@ const GameChat = ({ user, roomId }) => {
     console.log('🎥 GameChat mounting for room:', roomId);
     setConnectionStatus('Requesting camera & mic...');
 
-    socketRef.current = io('http://localhost:5000');
+    socketRef.current = io(import.meta.env.VITE_API_URL);
 
     // Try to get both video and audio
     navigator.mediaDevices.getUserMedia({ audio: true, video: true })
