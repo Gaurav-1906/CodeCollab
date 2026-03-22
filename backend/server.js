@@ -273,6 +273,14 @@ io.on('connection', (socket) => {
     });
   });
 
+  // NEW: Request participants count
+  socket.on('request-participants-count', ({ roomId }) => {
+    if (roomParticipants.has(roomId)) {
+      const count = roomParticipants.get(roomId).size;
+      io.to(socket.id).emit('room-participants-count', { roomId, count });
+    }
+  });
+
   socket.on('leave-room', async ({ userId, username }) => {
     const currentRoom = socket.data.currentRoom;
     if (currentRoom) {

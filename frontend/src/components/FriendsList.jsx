@@ -18,7 +18,16 @@ const FriendsList = ({ user, currentRoom, onJoinRoom, socket, onNotification }) 
           headers: { Authorization: `Bearer ${token}` }
         });
         const data = await response.json();
-        if (response.ok) setFriends(data);
+        if (response.ok) {
+          // Format initial status display
+          const formatted = data.map(friend => ({
+            ...friend,
+            statusDisplay: friend.status === 'online'
+              ? (friend.currentRoom ? `📍 ${friend.currentRoom}` : '● Online')
+              : '● Offline'
+          }));
+          setFriends(formatted);
+        }
       } catch (err) {
         console.error('Error loading friends:', err);
       }
@@ -49,14 +58,30 @@ const FriendsList = ({ user, currentRoom, onJoinRoom, socket, onNotification }) 
       onNotification(`${friend.username} accepted your friend request!`, 'success');
     });
 
-    // Critical: status update with console log
+    // Correct status update using the `status` field
     socket.on('friend-status-changed', ({ username, status, currentRoom: friendRoom }) => {
       console.log('📡 friend-status-changed:', { username, status, friendRoom });
-      const statusText = friendRoom ? `📍 ${friendRoom}` : '● Online';
-      onNotification(`${username} is now ${friendRoom ? `in room: ${friendRoom}` : 'online'}`, status === 'online' ? 'success' : 'warning');
-      setFriends(prev => prev.map(f =>
-        f.username === username ? { ...f, status: statusText, currentRoom: friendRoom } : f
-      ));
+
+      // Determine display text
+      let statusDisplay = '';
+      if (status === 'online') {
+        statusDisplay = friendRoom ? `📍 ${friendRoom}` : '● Online';
+      } else {
+        statusDisplay = '● Offline';
+      }
+
+      onNotification(
+        `${username} is now ${friendRoom ? `in room: ${friendRoom}` : status === 'online' ? 'online' : 'offline'}`,
+        status === 'online' ? 'success' : 'warning'
+      );
+
+      setFriends(prev =>
+        prev.map(f =>
+          f.username === username
+            ? { ...f, status, currentRoom: friendRoom, statusDisplay }
+            : f
+        )
+      );
     });
 
     socket.on('invite-accepted', ({ fromUsername }) => {
@@ -181,8 +206,8 @@ const FriendsList = ({ user, currentRoom, onJoinRoom, socket, onNotification }) 
           <div key={friend._id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', marginBottom: '8px', background: '#3c3c3c', borderRadius: '8px' }}>
             <div>
               <div style={{ fontWeight: 'bold' }}>{friend.username}</div>
-              <div style={{ fontSize: '11px', color: friend.currentRoom ? '#ff9800' : '#4CAF50' }}>
-                {friend.currentRoom ? `📍 ${friend.currentRoom}` : '● Online'}
+              <div style={{ fontSize: '11px', color: friend.statusDisplay === '● Offline' ? '#888' : (friend.currentRoom ? '#ff9800' : '#4CAF50') }}>
+                {friend.statusDisplay}
               </div>
             </div>
             <button
