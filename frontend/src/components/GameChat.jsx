@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 
@@ -6,37 +6,108 @@ import Peer from 'simple-peer';
 window.global = window;
 window.process = window.process || { nextTick: (fn) => setTimeout(fn, 0) };
 
+// Icons
+const Icons = {
+  Mic: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+  ),
+  MicOff: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="1" y1="1" x2="23" y2="23" />
+      <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6" />
+      <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+  ),
+  Video: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+    </svg>
+  ),
+  VideoOff: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10" />
+      <line x1="1" y1="1" x2="23" y2="23" />
+    </svg>
+  ),
+  PhoneOff: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" />
+      <line x1="23" y1="1" x2="1" y2="23" />
+    </svg>
+  ),
+  Wifi: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+      <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+      <line x1="12" y1="20" x2="12.01" y2="20" />
+    </svg>
+  ),
+  Users: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+};
+
 const GameChat = ({ user, roomId }) => {
   const [peers, setPeers] = useState([]);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [stream, setStream] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('Initializing...');
+  const [statusType, setStatusType] = useState('connecting'); // 'connected', 'connecting', 'error'
   const socketRef = useRef();
   const userVideoRef = useRef();
   const peersRef = useRef({});
   const mountedRef = useRef(true);
 
-  // FIXED: Use environment variable, no localhost fallback
   const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
+
+  const getAvatarColor = useCallback((username) => {
+    const colors = [
+      'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+      'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+      'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+      'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    ];
+    let hash = 0;
+    if (!username) return colors[0];
+    for (let i = 0; i < username.length; i++) {
+      hash = ((hash << 5) - hash) + username.charCodeAt(i);
+    }
+    return colors[Math.abs(hash) % colors.length];
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
     
     if (roomId === 'lobby') {
-      setConnectionStatus('Join a room to start video call');
+      setConnectionStatus('Join a room to start');
+      setStatusType('connecting');
       return;
     }
 
-    console.log('🎥 GameChat mounting for room:', roomId);
-    
     if (!SOCKET_URL) {
-      console.error('❌ VITE_SOCKET_URL is not defined');
       setConnectionStatus('Configuration error');
+      setStatusType('error');
       return;
     }
     
-    setConnectionStatus('Requesting camera & mic...');
+    setConnectionStatus('Requesting camera...');
+    setStatusType('connecting');
 
     socketRef.current = io(SOCKET_URL, {
       withCredentials: true,
@@ -46,12 +117,11 @@ const GameChat = ({ user, roomId }) => {
     navigator.mediaDevices.getUserMedia({ audio: true, video: true })
       .then(mediaStream => {
         if (!mountedRef.current) return;
-        console.log('✅ Got media stream');
         setStream(mediaStream);
         if (userVideoRef.current) {
           userVideoRef.current.srcObject = mediaStream;
         }
-        setConnectionStatus('Camera active – joining room...');
+        setConnectionStatus('Joining room...');
         
         socketRef.current.emit('join-room', {
           roomId,
@@ -60,13 +130,17 @@ const GameChat = ({ user, roomId }) => {
         });
         
         setTimeout(() => {
-          if (mountedRef.current) setConnectionStatus('Waiting for others...');
+          if (mountedRef.current) {
+            setConnectionStatus('Waiting for others');
+            setStatusType('connected');
+          }
         }, 1000);
       })
       .catch(err => {
-        console.error('❌ Media error:', err);
+        console.error('Media error:', err);
         if (!mountedRef.current) return;
-        setConnectionStatus('Camera/Mic access denied – audio only');
+        setConnectionStatus('Camera denied');
+        setStatusType('error');
         socketRef.current.emit('join-room', {
           roomId,
           userId: user._id,
@@ -76,10 +150,9 @@ const GameChat = ({ user, roomId }) => {
 
     socketRef.current.on('user-joined', ({ userId, username }) => {
       if (!mountedRef.current) return;
-      console.log('👤 User joined:', username);
-      setConnectionStatus(`${username} joined – connecting...`);
+      setConnectionStatus(`${username} joined`);
+      setStatusType('connected');
       if (!peersRef.current[userId] && socketRef.current) {
-        console.log('📞 Creating peer for:', username);
         const peer = createPeer(userId, socketRef.current.id, stream);
         peersRef.current[userId] = { peer, username, peerId: userId };
         setPeers(Object.values(peersRef.current));
@@ -88,8 +161,7 @@ const GameChat = ({ user, roomId }) => {
 
     socketRef.current.on('receive-call', ({ signal, from, username }) => {
       if (!mountedRef.current) return;
-      console.log('📞 Incoming call from:', username);
-      setConnectionStatus(`Incoming call from ${username}...`);
+      setConnectionStatus(`Connecting to ${username}`);
       if (!peersRef.current[from]) {
         const peer = addPeer(signal, from, stream);
         peersRef.current[from] = { peer, username, peerId: from };
@@ -106,18 +178,16 @@ const GameChat = ({ user, roomId }) => {
 
     socketRef.current.on('user-left', (userId) => {
       if (!mountedRef.current) return;
-      console.log('👋 User left:', userId);
       if (peersRef.current[userId]) {
         peersRef.current[userId].peer.destroy();
         delete peersRef.current[userId];
         setPeers(Object.values(peersRef.current));
-        setConnectionStatus('User left');
+        setConnectionStatus('User disconnected');
       }
     });
 
     return () => {
       mountedRef.current = false;
-      console.log('🎥 GameChat unmounting');
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
@@ -137,7 +207,6 @@ const GameChat = ({ user, roomId }) => {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       },
     });
@@ -154,22 +223,15 @@ const GameChat = ({ user, roomId }) => {
     });
 
     peer.on('stream', remoteStream => {
-      console.log('📹 Received remote stream from:', targetUserId);
       const videoEl = document.getElementById(`video-${targetUserId}`);
       if (videoEl) videoEl.srcObject = remoteStream;
       const avatarEl = document.getElementById(`avatar-${targetUserId}`);
       if (avatarEl) avatarEl.style.display = 'none';
-      setConnectionStatus(`Connected to ${peersRef.current[targetUserId]?.username || 'user'}`);
+      setConnectionStatus(`Connected`);
+      setStatusType('connected');
     });
 
-    peer.on('connect', () => {
-      console.log('✅ Peer connected to:', targetUserId);
-    });
-
-    peer.on('error', err => {
-      console.error('Peer error:', err);
-    });
-
+    peer.on('error', err => console.error('Peer error:', err));
     return peer;
   };
 
@@ -182,7 +244,6 @@ const GameChat = ({ user, roomId }) => {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
         ],
       },
     });
@@ -194,51 +255,32 @@ const GameChat = ({ user, roomId }) => {
     });
 
     peer.on('stream', remoteStream => {
-      console.log('📹 Received remote stream from:', callerId);
       const videoEl = document.getElementById(`video-${callerId}`);
       if (videoEl) videoEl.srcObject = remoteStream;
       const avatarEl = document.getElementById(`avatar-${callerId}`);
       if (avatarEl) avatarEl.style.display = 'none';
-      setConnectionStatus(`Connected to ${peersRef.current[callerId]?.username || 'user'}`);
+      setConnectionStatus(`Connected`);
+      setStatusType('connected');
     });
 
-    peer.on('connect', () => {
-      console.log('✅ Peer connected to:', callerId);
-    });
-
-    peer.on('error', err => {
-      console.error('Peer error:', err);
-    });
-
+    peer.on('error', err => console.error('Peer error:', err));
     peer.signal(incomingSignal);
     return peer;
   };
 
-  const toggleAudio = () => {
+  const toggleAudio = useCallback(() => {
     if (stream) {
       stream.getAudioTracks().forEach(track => (track.enabled = !audioEnabled));
       setAudioEnabled(!audioEnabled);
     }
-  };
+  }, [stream, audioEnabled]);
 
-  const toggleVideo = () => {
+  const toggleVideo = useCallback(() => {
     if (stream) {
       stream.getVideoTracks().forEach(track => (track.enabled = !videoEnabled));
       setVideoEnabled(!videoEnabled);
     }
-  };
-
-  const getInitials = (name) => name?.charAt(0).toUpperCase() || '?';
-  
-  const getAvatarColor = (username) => {
-    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'];
-    let hash = 0;
-    if (!username) return colors[0];
-    for (let i = 0; i < username.length; i++) {
-      hash = ((hash << 5) - hash) + username.charCodeAt(i);
-    }
-    return colors[Math.abs(hash) % colors.length];
-  };
+  }, [stream, videoEnabled]);
 
   if (roomId === 'lobby') {
     return (
@@ -247,48 +289,80 @@ const GameChat = ({ user, roomId }) => {
         alignItems: 'center',
         justifyContent: 'center',
         height: '100%',
-        background: '#1e1e1e',
-        color: '#888'
+        background: 'var(--bg-tertiary)',
+        color: 'var(--text-tertiary)',
+        flexDirection: 'column',
+        gap: '8px',
       }}>
-        🎥 Join a room to start video call
+        <Icons.Video />
+        <p style={{ fontSize: '12px', margin: 0 }}>Join a room to start video</p>
       </div>
     );
   }
 
+  const statusColors = {
+    connected: { bg: 'rgba(16, 185, 129, 0.1)', text: 'var(--success)', border: 'rgba(16, 185, 129, 0.3)' },
+    connecting: { bg: 'rgba(245, 158, 11, 0.1)', text: 'var(--warning)', border: 'rgba(245, 158, 11, 0.3)' },
+    error: { bg: 'rgba(239, 68, 68, 0.1)', text: 'var(--error)', border: 'rgba(239, 68, 68, 0.3)' },
+  };
+
+  const currentStatusColor = statusColors[statusType] || statusColors.connecting;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#1e1e1e' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-tertiary)' }}>
+      {/* Status Bar */}
       <div
         style={{
-          padding: '6px',
-          background: connectionStatus.includes('Error') ? '#f44336' : 
-                     connectionStatus.includes('Connected') ? '#4CAF50' : '#ff9800',
-          color: 'white',
-          textAlign: 'center',
-          fontSize: '11px',
-          fontWeight: 500,
+          padding: '6px 12px',
+          background: currentStatusColor.bg,
+          borderBottom: `1px solid ${currentStatusColor.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
         }}
       >
-        {connectionStatus}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div
+            style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              background: currentStatusColor.text,
+              boxShadow: statusType === 'connected' ? `0 0 8px ${currentStatusColor.text}` : 'none',
+            }}
+          />
+          <span style={{ fontSize: '11px', fontWeight: 500, color: currentStatusColor.text }}>
+            {connectionStatus}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <Icons.Users />
+            {peers.length + 1}
+          </span>
+        </div>
       </div>
 
+      {/* Video Grid */}
       <div
         style={{
           flex: 1,
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-          gap: '10px',
-          padding: '10px',
+          gridTemplateColumns: peers.length === 0 ? '1fr' : peers.length === 1 ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(140px, 1fr))',
+          gap: '8px',
+          padding: '8px',
           overflow: 'auto',
         }}
       >
-        {/* Local video */}
+        {/* Local Video */}
         <div
           style={{
             position: 'relative',
-            background: '#2c2c2c',
+            background: 'var(--bg-secondary)',
             borderRadius: '8px',
             overflow: 'hidden',
             aspectRatio: '16/9',
+            border: '2px solid var(--primary)',
           }}
         >
           <video
@@ -301,6 +375,7 @@ const GameChat = ({ user, roomId }) => {
               height: '100%',
               objectFit: 'cover',
               display: videoEnabled && stream ? 'block' : 'none',
+              transform: 'scaleX(-1)',
             }}
           />
           {(!videoEnabled || !stream) && (
@@ -313,60 +388,60 @@ const GameChat = ({ user, roomId }) => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 background: getAvatarColor(user?.username),
-                color: 'white',
               }}
             >
               <div
                 style={{
-                  width: '80px',
-                  height: '80px',
+                  width: '48px',
+                  height: '48px',
                   borderRadius: '50%',
                   background: 'rgba(0,0,0,0.3)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '40px',
-                  fontWeight: 'bold',
+                  fontSize: '20px',
+                  fontWeight: 700,
+                  color: 'white',
                 }}
               >
-                {getInitials(user?.username)}
+                {user?.username?.charAt(0).toUpperCase() || '?'}
               </div>
-              <div style={{ marginTop: '10px', fontSize: '14px', fontWeight: 'bold' }}>
-                {user?.username || 'You'}
-              </div>
-              <div style={{ fontSize: '12px', opacity: 0.8, marginTop: '4px' }}>Camera off</div>
             </div>
           )}
           <div
             style={{
               position: 'absolute',
-              bottom: '10px',
-              left: '10px',
+              bottom: '6px',
+              left: '6px',
               background: 'rgba(0,0,0,0.6)',
+              backdropFilter: 'blur(4px)',
               color: 'white',
-              padding: '4px 8px',
+              padding: '3px 8px',
               borderRadius: '4px',
-              fontSize: '12px',
+              fontSize: '10px',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '4px',
+              fontWeight: 500,
             }}
           >
-            <span>{user?.username || 'You'} (You)</span>
-            {!audioEnabled && <span>🔇</span>}
+            <span>{user?.username || 'You'}</span>
+            <span style={{ opacity: 0.7 }}>(You)</span>
+            {!audioEnabled && <Icons.MicOff />}
           </div>
         </div>
 
-        {/* Remote videos */}
+        {/* Remote Videos */}
         {peers.map(peer => (
           <div
             key={peer.peerId}
             style={{
               position: 'relative',
-              background: '#2c2c2c',
+              background: 'var(--bg-secondary)',
               borderRadius: '8px',
               overflow: 'hidden',
               aspectRatio: '16/9',
+              border: '1px solid var(--border-primary)',
             }}
           >
             <video
@@ -388,41 +463,37 @@ const GameChat = ({ user, roomId }) => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 background: getAvatarColor(peer.username),
-                color: 'white',
-                zIndex: 5,
               }}
             >
               <div
                 style={{
-                  width: '80px',
-                  height: '80px',
+                  width: '48px',
+                  height: '48px',
                   borderRadius: '50%',
                   background: 'rgba(0,0,0,0.3)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '40px',
-                  fontWeight: 'bold',
+                  fontSize: '20px',
+                  fontWeight: 700,
+                  color: 'white',
                 }}
               >
-                {getInitials(peer.username)}
+                {peer.username?.charAt(0).toUpperCase() || '?'}
               </div>
-              <div style={{ marginTop: '10px', fontSize: '14px', fontWeight: 'bold' }}>
-                {peer.username}
-              </div>
-              <div style={{ fontSize: '12px', opacity: 0.8, marginTop: '4px' }}>Camera off</div>
             </div>
             <div
               style={{
                 position: 'absolute',
-                bottom: '10px',
-                left: '10px',
+                bottom: '6px',
+                left: '6px',
                 background: 'rgba(0,0,0,0.6)',
+                backdropFilter: 'blur(4px)',
                 color: 'white',
-                padding: '4px 8px',
+                padding: '3px 8px',
                 borderRadius: '4px',
-                fontSize: '12px',
-                zIndex: 10,
+                fontSize: '10px',
+                fontWeight: 500,
               }}
             >
               {peer.username}
@@ -431,44 +502,69 @@ const GameChat = ({ user, roomId }) => {
         ))}
       </div>
 
+      {/* Controls */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'center',
-          gap: '15px',
-          padding: '15px',
-          background: '#2c2c2c',
+          gap: '12px',
+          padding: '10px',
+          background: 'var(--bg-secondary)',
+          borderTop: '1px solid var(--border-primary)',
         }}
       >
         <button
           onClick={toggleAudio}
           style={{
-            width: '50px',
-            height: '50px',
+            width: '40px',
+            height: '40px',
             borderRadius: '50%',
             border: 'none',
-            background: audioEnabled ? '#4CAF50' : '#f44336',
-            color: 'white',
-            fontSize: '20px',
+            background: audioEnabled ? 'var(--bg-tertiary)' : 'var(--error)',
+            color: audioEnabled ? 'var(--text-primary)' : 'white',
             cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all var(--transition-fast)',
+            boxShadow: 'var(--shadow-sm)',
           }}
+          onMouseEnter={e => {
+            if (audioEnabled) e.currentTarget.style.background = 'var(--bg-hover)';
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background = audioEnabled ? 'var(--bg-tertiary)' : 'var(--error)';
+          }}
+          title={audioEnabled ? 'Mute' : 'Unmute'}
         >
-          {audioEnabled ? '🎤' : '🔇'}
+          {audioEnabled ? <Icons.Mic /> : <Icons.MicOff />}
         </button>
+
         <button
           onClick={toggleVideo}
           style={{
-            width: '50px',
-            height: '50px',
+            width: '40px',
+            height: '40px',
             borderRadius: '50%',
             border: 'none',
-            background: videoEnabled ? '#2196F3' : '#f44336',
-            color: 'white',
-            fontSize: '20px',
+            background: videoEnabled ? 'var(--bg-tertiary)' : 'var(--error)',
+            color: videoEnabled ? 'var(--text-primary)' : 'white',
             cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all var(--transition-fast)',
+            boxShadow: 'var(--shadow-sm)',
           }}
+          onMouseEnter={e => {
+            if (videoEnabled) e.currentTarget.style.background = 'var(--bg-hover)';
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.background = videoEnabled ? 'var(--bg-tertiary)' : 'var(--error)';
+          }}
+          title={videoEnabled ? 'Turn off camera' : 'Turn on camera'}
         >
-          {videoEnabled ? '📹' : '🚫'}
+          {videoEnabled ? <Icons.Video /> : <Icons.VideoOff />}
         </button>
       </div>
     </div>
