@@ -428,6 +428,7 @@ server.listen(PORT, () => {
   console.log(`📦 MongoDB: Connected`);
   console.log(`🔥 Redis: Connected`);
   console.log(`🔌 Socket.io: Ready`);
+  console.log(`🔌 Yjs WebSocket attached`);
   console.log(`📚 API available at http://localhost:${PORT}`);
 });
 
