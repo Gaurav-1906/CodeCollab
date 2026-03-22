@@ -1,0 +1,135 @@
+.voice-call-container {
+  background: white;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.incoming-call {
+  background: #4CAF50;
+  color: white;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.8; }
+  100% { opacity: 1; }
+}
+
+.call-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.answer-btn {
+  background: white;
+  color: #4CAF50;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.reject-btn {
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.call-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.start-call-btn {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+  flex: 1;
+}
+
+.start-call-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.call-status {
+  background: #e3f2fd;
+  padding: 8px 15px;
+  border-radius: 5px;
+  color: #1976d2;
+  font-weight: 500;
+}
+
+.mute-btn {
+  background: #ff9800;
+  color: white;
+  border: none;
+  padding: 8px 15px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.end-call-btn {
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 8px 15px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.online-users {
+  border-top: 1px solid #eee;
+  padding-top: 15px;
+}
+
+.online-users h4 {
+  margin: 0 0 10px 0;
+  color: #333;
+}
+
+.user-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  background: #f5f5f5;
+  border-radius: 5px;
+  margin-bottom: 5px;
+}
+
+.user-item span {
+  color: #555;
+}
+
+.call-user-btn {
+  background: #2196F3;
+  color: white;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.call-user-btn:hover {
+  background: #1976D2;
+}
