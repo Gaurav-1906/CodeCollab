@@ -8,9 +8,6 @@ const dotenv = require('dotenv');
 const connectDB = require('./src/config/db');
 const connectRedis = require('./src/config/redis');
 const User = require('./src/models/User');
-const WebSocket = require('ws');
-const Y = require('yjs');
-const { setupWSConnection } = require('y-websocket/bin/utils');
 
 // Import routes
 const authRoutes = require('./src/routes/authRoutes');
@@ -59,9 +56,7 @@ app.get('/', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 
-// -------------------------------------------------------------------
-// Friend routes – fully implemented
-// -------------------------------------------------------------------
+// Friend routes
 app.get('/api/users/search', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -109,9 +104,7 @@ app.get('/api/users/friends', async (req, res) => {
   }
 });
 
-// -------------------------------------------------------------------
-// CODE EXECUTION ENDPOINT (JDoodle API)
-// -------------------------------------------------------------------
+// Code execution endpoint
 app.post('/api/execute', async (req, res) => {
   const { code, language, input = '' } = req.body;
   console.log(`📝 Executing ${language} code with input: ${input.substring(0, 50)}...`);
@@ -206,7 +199,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Friend request events
   socket.on('send-friend-request', ({ to, from, fromUsername }) => {
     const targetSocketId = userSockets.get(to);
     if (targetSocketId) {
@@ -236,7 +228,6 @@ io.on('connection', (socket) => {
     if (targetSocketId) io.to(targetSocketId).emit('friend-request-rejected', { from });
   });
 
-  // Room events
   socket.on('join-room', async ({ roomId, userId, username }) => {
     const previousRoom = socket.data.currentRoom;
     if (previousRoom && previousRoom !== roomId) {
@@ -280,7 +271,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // NEW: Request participants count
   socket.on('request-participants-count', ({ roomId }) => {
     if (roomParticipants.has(roomId)) {
       const count = roomParticipants.get(roomId).size;
@@ -319,7 +309,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC signaling
   socket.on('send-signal', ({ signal, to, from, username }) => {
     const targetSocketId = userSockets.get(to);
     if (targetSocketId) io.to(targetSocketId).emit('receive-call', { signal, from, username });
@@ -330,7 +319,6 @@ io.on('connection', (socket) => {
     if (targetSocketId) io.to(targetSocketId).emit('signal-returned', { signal, from: socket.id });
   });
 
-  // Chat events
   socket.on('join-chat', ({ roomId, userId, username }) => {
     const chatRoom = `chat-${roomId}`;
     socket.join(chatRoom);
@@ -347,7 +335,6 @@ io.on('connection', (socket) => {
     socket.to(chatRoom).emit('user-typing', { username, isTyping });
   });
 
-  // Invite events
   socket.on('send-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} invited user ${to} to room: ${room}`);
     const targetSocketId = userSockets.get(to);
@@ -414,24 +401,12 @@ app.use('*', (req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// Yjs WebSocket server on a separate port (5001)
-const yjsServer = http.createServer();
-const yjsWss = new WebSocket.Server({ server: yjsServer });
-yjsWss.on('connection', (conn, req) => {
-  console.log('Yjs WebSocket client connected');
-  setupWSConnection(conn, req);
-});
-yjsServer.listen(5001, () => {
-  console.log(`🚀 Yjs WebSocket server running on port 5001`);
-});
-
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📦 MongoDB: Connected`);
   console.log(`🔥 Redis: Connected`);
   console.log(`🔌 Socket.io: Ready`);
-  console.log(`🔌 Yjs WebSocket attached`);
   console.log(`📚 API available at http://localhost:${PORT}`);
 });
 
