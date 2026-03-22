@@ -17,6 +17,8 @@ connectDB();
 const redisClient = connectRedis();
 
 const app = express();
+// Enable trust proxy for Render
+app.set('trust proxy', 1);
 
 app.use(helmet());
 const allowedOrigins = process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(',') : ['http://localhost:5173'];
