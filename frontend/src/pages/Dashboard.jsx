@@ -215,7 +215,7 @@ const Dashboard = () => {
     return () => {
       newSocket.disconnect();
     };
-  }, [user, roomId, showNotification]);
+  }, [user, showNotification]);
 
   // Join room when roomId changes
   useEffect(() => {
