@@ -122,42 +122,52 @@ const GameChat = ({ user, roomId }) => {
           userVideoRef.current.srcObject = mediaStream;
         }
         setConnectionStatus('Joining room...');
-        
         socketRef.current.emit('join-room', {
           roomId,
           userId: user._id,
           username: user.username,
         });
-        
-        setTimeout(() => {
-          if (mountedRef.current) {
-            setConnectionStatus('Waiting for others');
-            setStatusType('connected');
-          }
-        }, 1000);
       })
       .catch(err => {
-        console.error('Media error:', err);
+        console.warn('Media not available, continuing without local camera/microphone:', err);
         if (!mountedRef.current) return;
-        setConnectionStatus('Camera denied');
-        setStatusType('error');
+        setStream(null);
+        setConnectionStatus('No local camera/mic; joining room nonetheless');
+        socketRef.current.emit('join-room', {
+          roomId,
+          userId: user._id,
+          username: user.username,
+        });
       });
+
+    // Make sure room join is not blocked by the media request
+    setTimeout(() => {
+      if (mountedRef.current) {
+        setConnectionStatus('Waiting for peers...');
+        setStatusType('connecting');
+      }
+    }, 600);
+
 
     socketRef.current.on('user-joined', ({ userId, username }) => {
       if (!mountedRef.current) return;
       setConnectionStatus(`${username} joined`);
       setStatusType('connected');
+      // Existing members do not create initiator peer here; incoming offer arrives via receive-call.
+    });
 
-      if (!stream) {
-        console.warn('No local media stream yet, skipping peer creation for', username);
-        return;
-      }
-
-      if (!peersRef.current[userId] && socketRef.current) {
+    socketRef.current.on('all-users', ({ users }) => {
+      if (!mountedRef.current) return;
+      if (!users || users.length === 0) return;
+      users.forEach(({ userId, username }) => {
+        if (userId === user._id) return;
+        if (peersRef.current[userId]) return; // avoid duplicates
         const peer = createPeer(userId, socketRef.current.id, stream);
         peersRef.current[userId] = { peer, username, peerId: userId };
-        setPeers(Object.values(peersRef.current));
-      }
+      });
+      setPeers(Object.values(peersRef.current));
+      setConnectionStatus('Connected');
+      setStatusType('connected');
     });
 
     socketRef.current.on('receive-call', ({ signal, from, username }) => {
