@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import io from 'socket.io-client';
+import socket from '../socket';
 import Peer from 'simple-peer';
 
 // Browser polyfill for simple-peer
@@ -109,10 +109,11 @@ const GameChat = ({ user, roomId }) => {
     setConnectionStatus('Requesting camera...');
     setStatusType('connecting');
 
-    socketRef.current = io(SOCKET_URL, {
-      withCredentials: true,
-      transports: ['websocket', 'polling']
-    });
+    socketRef.current = socket;
+
+    if (!socketRef.current.connected) {
+      socketRef.current.connect();
+    }
 
     navigator.mediaDevices.getUserMedia({ audio: true, video: true })
       .then(mediaStream => {
@@ -199,15 +200,13 @@ const GameChat = ({ user, roomId }) => {
 
     return () => {
       mountedRef.current = false;
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
+      // Do not disconnect shared socket; Dashboard and other modules may also use it.
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
       Object.values(peersRef.current).forEach(({ peer }) => peer.destroy());
     };
-  }, [roomId, user?._id, user?.username, SOCKET_URL]);
+  }, [roomId, user?._id, user?.username]);
 
   const createPeer = (targetUserId, callerId, stream) => {
     const peer = new Peer({
