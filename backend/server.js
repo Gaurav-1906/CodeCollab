@@ -324,12 +324,7 @@ io.on('connection', (socket) => {
 
   // Send friend request
   socket.on('send-friend-request', ({ to, from, fromUsername }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friend-request-received', { from, fromUsername });
-    } else {
-      console.log(`❌ User ${to} is not connected`);
-    }
+    emitToUser(to, 'friend-request-received', { from, fromUsername });
   });
 
   // Accept friend request
@@ -339,16 +334,10 @@ io.on('connection', (socket) => {
       await User.findByIdAndUpdate(to, { $addToSet: { friends: from } });
       
       const friend = await User.findById(to).select('-password');
-      const senderSocketId = userSockets.get(from);
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('friend-request-accepted', { friend });
-      }
+      emitToUser(from, 'friend-request-accepted', { friend });
       
       const sender = await User.findById(from).select('-password');
-      const targetSocketId = userSockets.get(to);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('friend-request-accepted', { friend: sender });
-      }
+      emitToUser(to, 'friend-request-accepted', { friend: sender });
     } catch (err) {
       console.error('Accept friend error:', err);
     }
@@ -356,10 +345,7 @@ io.on('connection', (socket) => {
 
   // Reject friend request
   socket.on('reject-friend-request', ({ to, from }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friend-request-rejected', { from });
-    }
+    emitToUser(to, 'friend-request-rejected', { from });
   });
 
   // Join room
@@ -517,29 +503,17 @@ io.on('connection', (socket) => {
   // Invite functionality
   socket.on('send-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} invited user ${to} to room: ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      console.log(`📤 Sending invite to socket: ${targetSocketId}`);
-      io.to(targetSocketId).emit('invite-received', { from, room, fromUsername });
-    } else {
-      console.log(`❌ Target user ${to} not connected`);
-    }
+    emitToUser(to, 'invite-received', { from, room, fromUsername });
   });
 
   socket.on('accept-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} accepted invite from ${to} to room ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('invite-accepted', { from, fromUsername, room });
-    }
+    emitToUser(to, 'invite-accepted', { from, fromUsername, room });
   });
 
   socket.on('reject-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} rejected invite from ${to} to room ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('invite-rejected', { from, fromUsername, room });
-    }
+    emitToUser(to, 'invite-rejected', { from, fromUsername, room });
   });
 
   // Disconnect handler
