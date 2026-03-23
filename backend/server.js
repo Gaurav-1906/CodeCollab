@@ -495,21 +495,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC signaling
-  socket.on('send-signal', ({ signal, to, from, username }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('receive-call', { signal, from, username });
-    }
-  });
-
-  socket.on('return-signal', ({ signal, to }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('signal-returned', { signal, from: socket.id });
-    }
-  });
-
   // Chat functionality
   socket.on('join-chat', ({ roomId, userId, username }) => {
     const chatRoom = `chat-${roomId}`;
@@ -525,6 +510,15 @@ io.on('connection', (socket) => {
   socket.on('typing', ({ roomId, isTyping, username }) => {
     const chatRoom = `chat-${roomId}`;
     socket.to(chatRoom).emit('user-typing', { username, isTyping });
+  });
+
+  // WebRTC signaling
+  socket.on('send-signal', ({ signal, to, from, username }) => {
+    emitToUser(to, 'receive-call', { signal, from, username });
+  });
+
+  socket.on('return-signal', ({ signal, to }) => {
+    emitToUser(to, 'signal-returned', { signal, from: socket.data.userId || socket.id });
   });
 
   // Invite functionality
