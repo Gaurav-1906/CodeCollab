@@ -269,8 +269,20 @@ app.set('io', io);
 app.set('redis', redisClient);
 
 // Socket.io data stores
-const userSockets = new Map(); // userId -> socketId
-const roomParticipants = new Map(); // roomId -> Set of userIds
+const userSockets = new Map(); // userId -> Set of socketIds
+const socketToUserId = new Map(); // socketId -> userId
+const roomParticipants = new Map(); // roomId -> Map<userId, Set<socketIds>>
+
+const emitToUser = (userId, event, payload) => {
+  const sockets = userSockets.get(userId);
+  if (!sockets) return;
+  sockets.forEach(sockId => io.to(sockId).emit(event, payload));
+};
+
+const getUniqueParticipantCount = (roomId) => {
+  const room = roomParticipants.get(roomId);
+  return room ? room.size : 0;
+};
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
@@ -279,7 +291,13 @@ io.on('connection', (socket) => {
   // Register user
   socket.on('register-user', ({ userId }) => {
     socket.data.userId = userId;
-    userSockets.set(userId, socket.id);
+    socketToUserId.set(socket.id, userId);
+
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
+    }
+    userSockets.get(userId).add(socket.id);
+
     console.log(`✅ User ${userId} registered with socket ${socket.id}`);
     console.log(`📱 Total connected users: ${userSockets.size}`);
   });
@@ -292,15 +310,12 @@ io.on('connection', (socket) => {
       const currentRoom = socket.data.currentRoom || null;
       
       user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', {
-            userId,
-            status: 'online',
-            username: user.username,
-            currentRoom
-          });
-        }
+        emitToUser(friend._id.toString(), 'friend-status-changed', {
+          userId,
+          status: 'online',
+          username: user.username,
+          currentRoom
+        });
       });
     } catch (error) {
       console.error('Error updating online status:', error);
@@ -350,48 +365,67 @@ io.on('connection', (socket) => {
   // Join room
   socket.on('join-room', async ({ roomId, userId, username }) => {
     const previousRoom = socket.data.currentRoom;
-    
+
     if (previousRoom && previousRoom !== roomId) {
       socket.leave(previousRoom);
       if (roomParticipants.has(previousRoom)) {
-        roomParticipants.get(previousRoom).delete(userId);
-        const count = roomParticipants.get(previousRoom).size;
+        const room = roomParticipants.get(previousRoom);
+        const userRoomSet = room.get(userId);
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(userId);
+            socket.to(previousRoom).emit('user-left', userId);
+            io.to(`chat-${previousRoom}`).emit('user-left-notification', { username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(previousRoom);
         io.to(previousRoom).emit('room-participants-count', { roomId: previousRoom, count });
-        io.to(`chat-${previousRoom}`).emit('user-left-notification', { username });
       }
     }
 
-    userSockets.set(userId, socket.id);
     socket.data.userId = userId;
+    socket.data.username = username;
+    socketToUserId.set(socket.id, userId);
+
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
+    }
+    userSockets.get(userId).add(socket.id);
+
     socket.join(roomId);
     socket.data.currentRoom = roomId;
-    socket.data.username = username;
-
-    console.log(`${username} joined room: ${roomId}`);
 
     if (!roomParticipants.has(roomId)) {
-      roomParticipants.set(roomId, new Set());
+      roomParticipants.set(roomId, new Map());
     }
-    roomParticipants.get(roomId).add(userId);
-    const count = roomParticipants.get(roomId).size;
+    const room = roomParticipants.get(roomId);
+    if (!room.has(userId)) {
+      room.set(userId, new Set());
+    }
+    const userRoomSet = room.get(userId);
+    const wasAlreadyInRoom = userRoomSet.size > 0;
+    userRoomSet.add(socket.id);
+
+    const count = getUniqueParticipantCount(roomId);
     io.to(roomId).emit('room-participants-count', { roomId, count });
 
-    socket.to(roomId).emit('user-joined', { userId, username });
-    socket.to(roomId).emit('user-joined-notification', { username, roomId });
-    io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
+    if (!wasAlreadyInRoom) {
+      socket.to(roomId).emit('user-joined', { userId, username });
+      socket.to(roomId).emit('user-joined-notification', { username, roomId });
+      io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
+    }
 
     try {
       const user = await User.findById(userId).populate('friends');
       user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', {
-            userId,
-            status: 'online',
-            username: user.username,
-            currentRoom: roomId
-          });
-        }
+        emitToUser(friend._id.toString(), 'friend-status-changed', {
+          userId,
+          status: 'online',
+          username: user.username,
+          currentRoom: roomId
+        });
       });
     } catch (error) {
       console.error('Error updating friend status:', error);
@@ -401,7 +435,7 @@ io.on('connection', (socket) => {
   // Request participants count
   socket.on('request-participants-count', ({ roomId }) => {
     if (roomParticipants.has(roomId)) {
-      const count = roomParticipants.get(roomId).size;
+      const count = getUniqueParticipantCount(roomId);
       io.to(socket.id).emit('room-participants-count', { roomId, count });
     }
   });
@@ -414,27 +448,33 @@ io.on('connection', (socket) => {
       socket.data.currentRoom = null;
 
       if (roomParticipants.has(currentRoom)) {
-        roomParticipants.get(currentRoom).delete(userId);
-        const count = roomParticipants.get(currentRoom).size;
+        const room = roomParticipants.get(currentRoom);
+        const userRoomSet = room.get(userId);
+
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(userId);
+            socket.to(currentRoom).emit('user-left', userId);
+            io.to(`chat-${currentRoom}`).emit('user-left-notification', { username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(currentRoom);
         io.to(currentRoom).emit('room-participants-count', { roomId: currentRoom, count });
       }
 
-      socket.to(currentRoom).emit('user-left-notification', { username });
-      io.to(`chat-${currentRoom}`).emit('user-left-notification', { username });
       console.log(`${username} left room: ${currentRoom}`);
 
       try {
         const user = await User.findById(userId).populate('friends');
         user.friends.forEach(friend => {
-          const friendSocketId = userSockets.get(friend._id.toString());
-          if (friendSocketId) {
-            io.to(friendSocketId).emit('friend-status-changed', {
-              userId,
-              status: 'online',
-              username: user.username,
-              currentRoom: null
-            });
-          }
+          emitToUser(friend._id.toString(), 'friend-status-changed', {
+            userId,
+            status: 'online',
+            username: user.username,
+            currentRoom: null
+          });
         });
       } catch (error) {
         console.error('Error updating friend status on leave:', error);
@@ -506,38 +546,52 @@ io.on('connection', (socket) => {
   socket.on('disconnect', async () => {
     const userId = socket.data.userId;
     if (userId) {
-      try {
-        await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
-        const user = await User.findById(userId).populate('friends');
-        
-        user.friends.forEach(friend => {
-          const friendSocketId = userSockets.get(friend._id.toString());
-          if (friendSocketId) {
-            io.to(friendSocketId).emit('friend-status-changed', { 
-              userId, 
-              status: 'offline', 
-              username: user.username 
+      const userSocketSet = userSockets.get(userId);
+      if (userSocketSet) {
+        userSocketSet.delete(socket.id);
+        if (userSocketSet.size === 0) {
+          userSockets.delete(userId);
+
+          try {
+            await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
+            const user = await User.findById(userId).populate('friends');
+            
+            user.friends.forEach(friend => {
+              emitToUser(friend._id.toString(), 'friend-status-changed', {
+                userId,
+                status: 'offline',
+                username: user.username
+              });
             });
+          } catch (error) {
+            console.error('Error updating offline status:', error);
           }
-        });
-      } catch (error) {
-        console.error('Error updating offline status:', error);
+        }
       }
-      
-      userSockets.delete(userId);
+
+      socketToUserId.delete(socket.id);
     }
     
     if (socket.data.currentRoom && socket.data.userId) {
       const roomId = socket.data.currentRoom;
       if (roomParticipants.has(roomId)) {
-        roomParticipants.get(roomId).delete(socket.data.userId);
-        const count = roomParticipants.get(roomId).size;
+        const room = roomParticipants.get(roomId);
+        const userRoomSet = room.get(socket.data.userId);
+
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(socket.data.userId);
+            socket.to(roomId).emit('user-left', socket.data.userId);
+            io.to(`chat-${roomId}`).emit('user-left-notification', { username: socket.data.username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(roomId);
         io.to(roomId).emit('room-participants-count', { roomId, count });
       }
-      socket.to(roomId).emit('user-left', socket.data.userId);
-      io.to(`chat-${roomId}`).emit('user-left-notification', { username: socket.data.username });
     }
-    
+
     console.log('❌ Client disconnected:', socket.id);
     console.log(`📱 Remaining connected users: ${userSockets.size}`);
   });
