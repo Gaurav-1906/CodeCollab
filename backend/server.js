@@ -8,6 +8,8 @@ const dotenv = require('dotenv');
 const connectDB = require('./src/config/db');
 const connectRedis = require('./src/config/redis');
 const User = require('./src/models/User');
+const WebSocket = require('ws');
+const { setupWSConnection } = require('y-websocket/bin/utils');
 
 // Import routes
 const authRoutes = require('./src/routes/authRoutes');
@@ -244,6 +246,18 @@ app.post('/api/execute', async (req, res) => {
 // Socket.io setup with dynamic CORS
 // -------------------------------------------------------------------
 const server = http.createServer(app);
+
+// Yjs WebSocket server for collaborative editing
+server.on('upgrade', (request, socket, head) => {
+  const pathname = request.url;
+  if (pathname && pathname.startsWith('/code-')) {
+    const wss = new WebSocket.Server({ noServer: true });
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      setupWSConnection(ws, request);
+    });
+  }
+  // Other upgrades (like Socket.IO) will be handled by their respective libraries
+});
 
 const io = new Server(server, {
   cors: {
