@@ -1,34 +1,152 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import io from 'socket.io-client';
+import socket from '../socket';
 import GameChat from '../components/GameChat';
 import Chat from '../components/Chat';
 import FriendsList from '../components/FriendsList';
 import CodeEditor from '../components/CodeEditor';
 import { useNotification } from '../context/NotificationContext';
+import { useTheme } from '../App';
 
-// Socket connection helper - NO LOCALHOST FALLBACK
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL;
-if (!SOCKET_URL) {
-  console.error('❌ VITE_SOCKET_URL is not defined in environment variables!');
-}
+// Icons as React components
+const Icons = {
+  Code: () => (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="16 18 22 12 16 6" />
+      <polyline points="8 6 2 12 8 18" />
+    </svg>
+  ),
+  Users: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  Copy: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  ),
+  Plus: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  ),
+  LogOut: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" y1="12" x2="9" y2="12" />
+    </svg>
+  ),
+  X: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  ChevronLeft: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  ),
+  ChevronRight: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  ),
+  Sun: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="23" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      <line x1="1" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="12" x2="23" y2="12" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    </svg>
+  ),
+  Moon: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  ),
+  Refresh: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" />
+      <polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  ),
+  Video: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="23 7 16 12 23 17 23 7" />
+      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+    </svg>
+  ),
+  MessageCircle: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    </svg>
+  ),
+  Settings: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
+  Wifi: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+      <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+      <line x1="12" y1="20" x2="12.01" y2="20" />
+    </svg>
+  ),
+  WifiOff: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="1" y1="1" x2="23" y2="23" />
+      <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55" />
+      <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39" />
+      <path d="M10.71 5.05A16 16 0 0 1 22.58 9" />
+      <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88" />
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+      <line x1="12" y1="20" x2="12.01" y2="20" />
+    </svg>
+  ),
+  DoorOpen: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 4h3a2 2 0 0 1 2 2v14" />
+      <path d="M2 20h3" />
+      <path d="M13 20h9" />
+      <path d="M10 12v.01" />
+      <path d="M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z" />
+    </svg>
+  ),
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { theme, toggleTheme } = useTheme();
   const [user, setUser] = useState(null);
   const [roomId, setRoomId] = useState('lobby');
   const [showRoomModal, setShowRoomModal] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
   const [joinRoomId, setJoinRoomId] = useState('');
-  const [socket, setSocket] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [participantCount, setParticipantCount] = useState(0);
   const [socketReady, setSocketReady] = useState(false);
   const { showNotification } = useNotification();
 
-  // Panel resizing
+  // Panel resizing state
   const [leftWidth, setLeftWidth] = useState(280);
-  const [rightWidth, setRightWidth] = useState(320);
+  const [rightWidth, setRightWidth] = useState(340);
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isDraggingLeft, setIsDraggingLeft] = useState(false);
@@ -45,65 +163,73 @@ const Dashboard = () => {
     }
   }, [navigate]);
 
-  // Initialize Socket.IO connection
+  // Socket connection and event listeners
   useEffect(() => {
     if (!user) return;
 
-    console.log('🔌 Connecting to Socket.IO at:', SOCKET_URL);
-    const newSocket = io(SOCKET_URL, {
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
-    });
+    if (!socket.connected) {
+      socket.connect();
+    }
 
-    newSocket.on('connect', () => {
-      console.log('✅ Socket connected with ID:', newSocket.id);
+    const onConnect = () => {
+      console.log('Socket connected with ID:', socket.id);
       setSocketReady(true);
-      newSocket.emit('register-user', { userId: user._id });
-      newSocket.emit('user-online', { userId: user._id });
-    });
+      socket.emit('register-user', { userId: user._id });
+      socket.emit('user-online', { userId: user._id });
+    };
 
-    newSocket.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error.message);
+    const onConnectError = (error) => {
+      console.error('Socket connection error:', error.message);
       showNotification('Connection error. Please refresh the page.', 'error');
-    });
+      setSocketReady(false);
+    };
 
-    newSocket.on('user-joined-notification', ({ username, roomId: joinedRoom }) => {
+    const onUserJoined = ({ username, roomId: joinedRoom }) => {
       if (joinedRoom === roomId) {
-        showNotification(`${username} joined the room!`, 'success');
+        showNotification(`${username} joined the room`, 'success');
       }
-    });
+    };
 
-    newSocket.on('user-left-notification', ({ username }) => {
+    const onUserLeft = ({ username }) => {
       if (roomId !== 'lobby') {
-        showNotification(`${username} left the room.`, 'info');
+        showNotification(`${username} left the room`, 'info');
       }
-    });
+    };
 
-    newSocket.on('room-participants-count', ({ roomId: updatedRoomId, count }) => {
+    const onRoomCount = ({ roomId: updatedRoomId, count }) => {
       if (updatedRoomId === roomId) {
         setParticipantCount(count);
       }
-    });
+    };
 
-    setSocket(newSocket);
+    socket.on('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    socket.on('user-joined-notification', onUserJoined);
+    socket.on('user-left-notification', onUserLeft);
+    socket.on('room-participants-count', onRoomCount);
+
+    if (socket.connected) {
+      setSocketReady(true);
+    }
 
     return () => {
-      newSocket.disconnect();
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+      socket.off('user-joined-notification', onUserJoined);
+      socket.off('user-left-notification', onUserLeft);
+      socket.off('room-participants-count', onRoomCount);
     };
   }, [user, roomId, showNotification]);
 
-  // Join room when roomId changes
+  // Join room when roomId changes (and socket is ready)
   useEffect(() => {
-    if (!socket || !socketReady || !user) return;
-    
+    if (!socketReady || !user) return;
+
     if (roomId !== 'lobby') {
-      console.log(`📡 Joining room: ${roomId}`);
+      console.log(`Joining room: ${roomId}`);
       socket.emit('join-room', { roomId, userId: user._id, username: user.username });
     }
-  }, [roomId, socket, socketReady, user]);
+  }, [roomId, socketReady, user]);
 
   // Room persistence
   useEffect(() => {
@@ -121,9 +247,32 @@ const Dashboard = () => {
     }
   }, [roomId]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+        e.preventDefault();
+        toggleLeftPanel();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === '.') {
+        e.preventDefault();
+        toggleRightPanel();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
+        e.preventDefault();
+        setShowRoomModal(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Handlers
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('currentRoom');
     navigate('/login');
   };
 
@@ -133,6 +282,7 @@ const Dashboard = () => {
       setRoomId(roomCode);
       setShowRoomModal(false);
       setNewRoomName('');
+      showNotification('Room created successfully', 'success');
     }
   };
 
@@ -141,6 +291,7 @@ const Dashboard = () => {
       setRoomId(joinRoomId);
       setShowRoomModal(false);
       setJoinRoomId('');
+      showNotification('Joined room successfully', 'success');
     }
   };
 
@@ -149,7 +300,7 @@ const Dashboard = () => {
   };
 
   const leaveRoom = () => {
-    if (socket && socketReady && roomId !== 'lobby') {
+    if (socketReady && roomId !== 'lobby') {
       socket.emit('leave-room', { userId: user._id, username: user.username });
       setRoomId('lobby');
       setParticipantCount(0);
@@ -158,8 +309,13 @@ const Dashboard = () => {
     }
   };
 
-  // Responsive & resize handlers
-  const handleResize = () => {
+  const copyRoomId = useCallback(() => {
+    navigator.clipboard.writeText(roomId);
+    showNotification('Room code copied to clipboard', 'success');
+  }, [roomId, showNotification]);
+
+  // Resize handlers
+  const handleResize = useCallback(() => {
     const width = window.innerWidth;
     if (width < 768) {
       setIsLeftOpen(false);
@@ -169,52 +325,52 @@ const Dashboard = () => {
       setIsRightOpen(true);
       if (width < 1024) {
         setLeftWidth(240);
-        setRightWidth(280);
+        setRightWidth(300);
       } else {
         setLeftWidth(280);
-        setRightWidth(320);
+        setRightWidth(340);
       }
     }
-  };
+  }, []);
 
   useEffect(() => {
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [handleResize]);
 
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (isDraggingLeft && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const newWidth = e.clientX - rect.left;
-        const clamped = Math.min(Math.max(newWidth, 180), 400);
+        const clamped = Math.min(Math.max(newWidth, 200), 400);
         setLeftWidth(clamped);
-        if (clamped < 50) setIsLeftOpen(false);
+        if (clamped < 60) setIsLeftOpen(false);
         else setIsLeftOpen(true);
       }
       if (isDraggingRight && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const newWidth = rect.right - e.clientX;
-        const clamped = Math.min(Math.max(newWidth, 240), 500);
+        const clamped = Math.min(Math.max(newWidth, 260), 500);
         setRightWidth(clamped);
-        if (clamped < 50) setIsRightOpen(false);
+        if (clamped < 60) setIsRightOpen(false);
         else setIsRightOpen(true);
       }
     };
-    
+
     const handleMouseUp = () => {
       setIsDraggingLeft(false);
       setIsDraggingRight(false);
     };
-    
+
     if (isDraggingLeft || isDraggingRight) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
     }
-    
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -223,7 +379,7 @@ const Dashboard = () => {
     };
   }, [isDraggingLeft, isDraggingRight]);
 
-  const toggleLeftPanel = () => {
+  const toggleLeftPanel = useCallback(() => {
     if (isLeftOpen) {
       setLeftWidth(0);
       setIsLeftOpen(false);
@@ -231,27 +387,34 @@ const Dashboard = () => {
       setLeftWidth(280);
       setIsLeftOpen(true);
     }
-  };
-  
-  const toggleRightPanel = () => {
+  }, [isLeftOpen]);
+
+  const toggleRightPanel = useCallback(() => {
     if (isRightOpen) {
       setRightWidth(0);
       setIsRightOpen(false);
     } else {
-      setRightWidth(320);
+      setRightWidth(340);
       setIsRightOpen(true);
     }
-  };
-  
-  const refreshFriends = () => {
+  }, [isRightOpen]);
+
+  const refreshFriends = useCallback(() => {
     setRefreshKey(prev => prev + 1);
     showNotification('Refreshing friends list...', 'info');
-  };
+  }, [showNotification]);
 
   if (!user) {
     return (
-      <div style={{ height: '100vh', background: '#0a0a0a', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white' }}>
-        Loading...
+      <div style={{
+        height: '100vh',
+        background: 'var(--bg-primary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'var(--text-primary)'
+      }}>
+        <div className="spinner-lg" />
       </div>
     );
   }
@@ -261,177 +424,303 @@ const Dashboard = () => {
       style={{
         height: '100vh',
         width: '100vw',
-        background: '#0f0f0f',
+        background: 'var(--bg-primary)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        margin: 0,
-        padding: 0,
-        fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+        fontFamily: 'var(--font-sans)',
       }}
     >
       {/* Header */}
-      <div
+      <header
         style={{
-          background: '#141414',
-          borderBottom: '1px solid #2a2a2a',
-          padding: '0 24px',
+          background: 'var(--bg-secondary)',
+          borderBottom: '1px solid var(--border-primary)',
+          padding: '0 20px',
           height: '56px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexShrink: 0,
-          backdropFilter: 'blur(8px)',
-          zIndex: 10,
+          zIndex: 100,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+        {/* Left Section */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '24px' }}>💻</span>
-            <h1 style={{ color: '#4CAF50', margin: 0, fontSize: '20px', fontWeight: 600, letterSpacing: '-0.5px' }}>
+            <div
+              style={{
+                width: '34px',
+                height: '34px',
+                borderRadius: '10px',
+                background: 'linear-gradient(135deg, var(--primary) 0%, #059669 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+              }}
+            >
+              <Icons.Code />
+            </div>
+            <h1
+              style={{
+                color: 'var(--text-primary)',
+                margin: 0,
+                fontSize: '18px',
+                fontWeight: 600,
+                letterSpacing: '-0.5px',
+              }}
+            >
               CodeCollab
             </h1>
           </div>
+
+          {/* Room Badge */}
           <div
             style={{
-              background: '#1e1e1e',
+              background: 'var(--bg-tertiary)',
               padding: '6px 12px',
               borderRadius: '8px',
               display: 'flex',
               alignItems: 'center',
-              gap: '8px',
-              border: '1px solid #2a2a2a',
+              gap: '10px',
+              border: '1px solid var(--border-primary)',
             }}
           >
-            <span style={{ fontSize: '12px', color: '#aaa' }}>📍</span>
-            <span style={{ color: '#fff', fontSize: '13px', fontFamily: 'monospace' }}>
+            <div
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: roomId === 'lobby' ? 'var(--text-muted)' : 'var(--primary)',
+                boxShadow: roomId !== 'lobby' ? '0 0 8px var(--primary)' : 'none',
+              }}
+            />
+            <span
+              style={{
+                color: 'var(--text-primary)',
+                fontSize: '13px',
+                fontFamily: 'var(--font-mono)',
+                maxWidth: '180px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {roomId === 'lobby' ? 'Lobby' : roomId}
             </span>
             {roomId !== 'lobby' && (
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(roomId);
-                  showNotification('Room code copied!', 'success');
-                }}
+                onClick={copyRoomId}
                 style={{
-                  background: '#2c2c2c',
+                  background: 'var(--bg-hover)',
                   border: 'none',
-                  padding: '2px 6px',
+                  padding: '4px 6px',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  fontSize: '10px',
-                  color: '#ccc',
-                  transition: 'all 0.2s',
+                  color: 'var(--text-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  transition: 'all var(--transition-fast)',
                 }}
-                onMouseEnter={e => (e.target.style.background = '#3a3a3a')}
-                onMouseLeave={e => (e.target.style.background = '#2c2c2c')}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'var(--border-secondary)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                }}
+                title="Copy room code"
               >
-                Copy
+                <Icons.Copy />
               </button>
             )}
           </div>
+
+          {/* Participants */}
           {roomId !== 'lobby' && (
             <div
               style={{
-                background: '#2c2c2c',
-                color: '#fff',
-                padding: '4px 10px',
+                background: 'var(--accent-light)',
+                color: 'var(--accent)',
+                padding: '5px 12px',
                 borderRadius: '20px',
                 fontSize: '12px',
-                fontWeight: '500',
+                fontWeight: 500,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
               }}
             >
-              <span>👥</span>
-              <span>{participantCount}</span>
+              <Icons.Users />
+              <span>{participantCount} online</span>
             </div>
           )}
+
+          {/* Connection Status */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              color: socketReady ? 'var(--success)' : 'var(--error)',
+              fontSize: '12px',
+            }}
+          >
+            {socketReady ? <Icons.Wifi /> : <Icons.WifiOff />}
+            <span style={{ fontWeight: 500 }}>{socketReady ? 'Connected' : 'Disconnected'}</span>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+
+        {/* Right Section */}
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          {/* Theme Toggle */}
+          <button
+            onClick={toggleTheme}
+            style={{
+              padding: '8px',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-primary)',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all var(--transition-fast)',
+            }}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'var(--bg-hover)';
+              e.currentTarget.style.color = 'var(--text-primary)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.color = 'var(--text-secondary)';
+            }}
+            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          >
+            {theme === 'dark' ? <Icons.Sun /> : <Icons.Moon />}
+          </button>
+
+          {/* Room Actions */}
           <button
             onClick={() => setShowRoomModal(true)}
             style={{
-              padding: '6px 16px',
-              background: '#4CAF50',
+              padding: '8px 16px',
+              background: 'var(--primary)',
               color: 'white',
               border: 'none',
               borderRadius: '8px',
               cursor: 'pointer',
               fontSize: '13px',
               fontWeight: 500,
-              transition: 'all 0.2s',
-              boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all var(--transition-fast)',
             }}
-            onMouseEnter={e => (e.target.style.background = '#45a049')}
-            onMouseLeave={e => (e.target.style.background = '#4CAF50')}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'var(--primary-hover)';
+              e.currentTarget.style.transform = 'translateY(-1px)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'var(--primary)';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }}
           >
-            Join/Create Room
+            <Icons.Plus />
+            Join / Create Room
           </button>
+
           {roomId !== 'lobby' && (
             <button
               onClick={leaveRoom}
               style={{
-                padding: '6px 16px',
-                background: '#dc2626',
+                padding: '8px 16px',
+                background: 'var(--error)',
                 color: 'white',
                 border: 'none',
                 borderRadius: '8px',
                 cursor: 'pointer',
                 fontSize: '13px',
                 fontWeight: 500,
-                transition: 'all 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'all var(--transition-fast)',
               }}
-              onMouseEnter={e => (e.target.style.background = '#b91c1c')}
-              onMouseLeave={e => (e.target.style.background = '#dc2626')}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = '#dc2626';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'var(--error)';
+              }}
             >
-              Exit Room
+              <Icons.DoorOpen />
+              Leave Room
             </button>
           )}
-          <div
-            style={{
-              width: '34px',
-              height: '34px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: 'bold',
-              fontSize: '14px',
-              color: 'white',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-            }}
-          >
-            {user.username.charAt(0).toUpperCase()}
+
+          {/* User Avatar */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '8px' }}>
+            <div
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '10px',
+                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 600,
+                fontSize: '14px',
+                color: 'white',
+                boxShadow: '0 2px 8px rgba(99, 102, 241, 0.3)',
+              }}
+            >
+              {user.username.charAt(0).toUpperCase()}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <span style={{ color: 'var(--text-primary)', fontSize: '13px', fontWeight: 500 }}>
+                {user.username}
+              </span>
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '11px' }}>Online</span>
+            </div>
           </div>
-          <span style={{ color: '#ccc', fontSize: '13px', fontWeight: 500 }}>{user.username}</span>
+
+          {/* Logout */}
           <button
             onClick={handleLogout}
             style={{
-              padding: '6px 14px',
+              padding: '8px',
               background: 'transparent',
-              color: '#aaa',
-              border: '1px solid #2a2a2a',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-primary)',
               borderRadius: '8px',
               cursor: 'pointer',
-              fontSize: '12px',
-              transition: 'all 0.2s',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all var(--transition-fast)',
             }}
             onMouseEnter={e => {
-              e.target.style.background = '#2a2a2a';
-              e.target.style.color = '#fff';
+              e.currentTarget.style.background = 'var(--bg-hover)';
+              e.currentTarget.style.borderColor = 'var(--error)';
+              e.currentTarget.style.color = 'var(--error)';
             }}
             onMouseLeave={e => {
-              e.target.style.background = 'transparent';
-              e.target.style.color = '#aaa';
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.borderColor = 'var(--border-primary)';
+              e.currentTarget.style.color = 'var(--text-secondary)';
             }}
+            title="Logout"
           >
-            Logout
+            <Icons.LogOut />
           </button>
         </div>
-      </div>
+      </header>
 
       {/* Main Content */}
       <div
@@ -440,7 +729,7 @@ const Dashboard = () => {
           flex: 1,
           display: 'flex',
           overflow: 'hidden',
-          padding: '16px',
+          padding: '12px',
           gap: '0',
           minHeight: 0,
           position: 'relative',
@@ -452,39 +741,40 @@ const Dashboard = () => {
             width: isLeftOpen ? leftWidth : 48,
             minWidth: 48,
             maxWidth: 450,
-            background: '#141414',
+            background: 'var(--bg-secondary)',
             borderRadius: '12px',
             transition: isDraggingLeft ? 'none' : 'width 0.2s ease',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
             flexShrink: 0,
-            border: '1px solid #2a2a2a',
+            border: '1px solid var(--border-primary)',
           }}
         >
           <div
             style={{
-              padding: '14px 16px',
-              borderBottom: '1px solid #2a2a2a',
+              padding: '12px 14px',
+              borderBottom: '1px solid var(--border-primary)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              gap: '8px',
             }}
           >
             {isLeftOpen && (
               <span
                 style={{
-                  color: '#ccc',
-                  fontSize: '12px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '11px',
                   fontWeight: 600,
                   textTransform: 'uppercase',
                   letterSpacing: '0.5px',
                 }}
               >
-                FRIENDS
+                Friends
               </span>
             )}
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '4px' }}>
               {isLeftOpen && (
                 <button
                   onClick={refreshFriends}
@@ -492,17 +782,25 @@ const Dashboard = () => {
                     background: 'transparent',
                     border: 'none',
                     cursor: 'pointer',
-                    color: '#aaa',
-                    fontSize: '14px',
-                    padding: '4px',
-                    borderRadius: '4px',
-                    transition: 'all 0.2s',
+                    color: 'var(--text-tertiary)',
+                    padding: '6px',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all var(--transition-fast)',
                   }}
-                  onMouseEnter={e => (e.target.style.background = '#2a2a2a')}
-                  onMouseLeave={e => (e.target.style.background = 'transparent')}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'var(--bg-hover)';
+                    e.currentTarget.style.color = 'var(--text-primary)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'transparent';
+                    e.currentTarget.style.color = 'var(--text-tertiary)';
+                  }}
                   title="Refresh friends list"
                 >
-                  🔄
+                  <Icons.Refresh />
                 </button>
               )}
               <button
@@ -511,16 +809,25 @@ const Dashboard = () => {
                   background: 'transparent',
                   border: 'none',
                   cursor: 'pointer',
-                  color: '#aaa',
-                  fontSize: '14px',
-                  padding: '4px',
-                  borderRadius: '4px',
-                  transition: 'all 0.2s',
+                  color: 'var(--text-tertiary)',
+                  padding: '6px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all var(--transition-fast)',
                 }}
-                onMouseEnter={e => (e.target.style.background = '#2a2a2a')}
-                onMouseLeave={e => (e.target.style.background = 'transparent')}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'var(--text-tertiary)';
+                }}
+                title={isLeftOpen ? 'Collapse panel' : 'Expand panel'}
               >
-                {isLeftOpen ? '◀' : '▶'}
+                {isLeftOpen ? <Icons.ChevronLeft /> : <Icons.ChevronRight />}
               </button>
             </div>
           </div>
@@ -543,15 +850,18 @@ const Dashboard = () => {
           <div
             onMouseDown={() => setIsDraggingLeft(true)}
             style={{
-              width: '4px',
+              width: '6px',
               cursor: 'col-resize',
               background: 'transparent',
               transition: 'background 0.2s',
-              margin: '0 4px',
-              borderRadius: '2px',
+              margin: '0 2px',
+              borderRadius: '3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
-            onMouseEnter={e => (e.target.style.background = '#4CAF50')}
-            onMouseLeave={e => (e.target.style.background = 'transparent')}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--primary)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           />
         )}
 
@@ -559,13 +869,13 @@ const Dashboard = () => {
         <div
           style={{
             flex: 1,
-            background: '#1a1a1a',
+            background: 'var(--bg-secondary)',
             borderRadius: '12px',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
             minWidth: 300,
-            border: '1px solid #2a2a2a',
+            border: '1px solid var(--border-primary)',
           }}
         >
           <CodeEditor user={user} roomId={roomId} />
@@ -576,15 +886,18 @@ const Dashboard = () => {
           <div
             onMouseDown={() => setIsDraggingRight(true)}
             style={{
-              width: '4px',
+              width: '6px',
               cursor: 'col-resize',
               background: 'transparent',
               transition: 'background 0.2s',
-              margin: '0 4px',
-              borderRadius: '2px',
+              margin: '0 2px',
+              borderRadius: '3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
-            onMouseEnter={e => (e.target.style.background = '#4CAF50')}
-            onMouseLeave={e => (e.target.style.background = 'transparent')}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--primary)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           />
         )}
 
@@ -594,37 +907,40 @@ const Dashboard = () => {
             width: isRightOpen ? rightWidth : 48,
             minWidth: 48,
             maxWidth: 550,
-            background: '#141414',
+            background: 'var(--bg-secondary)',
             borderRadius: '12px',
             transition: isDraggingRight ? 'none' : 'width 0.2s ease',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column',
             flexShrink: 0,
-            border: '1px solid #2a2a2a',
+            border: '1px solid var(--border-primary)',
           }}
         >
           <div
             style={{
-              padding: '14px 16px',
-              borderBottom: '1px solid #2a2a2a',
+              padding: '12px 14px',
+              borderBottom: '1px solid var(--border-primary)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
             }}
           >
             {isRightOpen && (
-              <span
-                style={{
-                  color: '#ccc',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
-                }}
-              >
-                CHAT & VIDEO
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Icons.MessageCircle />
+                <span
+                  style={{
+                    color: 'var(--text-secondary)',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}
+                >
+                  Communication
+                </span>
+              </div>
             )}
             <button
               onClick={toggleRightPanel}
@@ -632,16 +948,25 @@ const Dashboard = () => {
                 background: 'transparent',
                 border: 'none',
                 cursor: 'pointer',
-                color: '#aaa',
-                fontSize: '14px',
-                padding: '4px',
-                borderRadius: '4px',
-                transition: 'all 0.2s',
+                color: 'var(--text-tertiary)',
+                padding: '6px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all var(--transition-fast)',
               }}
-              onMouseEnter={e => (e.target.style.background = '#2a2a2a')}
-              onMouseLeave={e => (e.target.style.background = 'transparent')}
+              onMouseEnter={e => {
+                e.currentTarget.style.background = 'var(--bg-hover)';
+                e.currentTarget.style.color = 'var(--text-primary)';
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.color = 'var(--text-tertiary)';
+              }}
+              title={isRightOpen ? 'Collapse panel' : 'Expand panel'}
             >
-              {isRightOpen ? '▶' : '◀'}
+              {isRightOpen ? <Icons.ChevronRight /> : <Icons.ChevronLeft />}
             </button>
           </div>
           {isRightOpen && (
@@ -651,58 +976,59 @@ const Dashboard = () => {
                 overflow: 'auto',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: '16px',
-                padding: '16px',
+                gap: '12px',
+                padding: '12px',
               }}
             >
               {/* Video Chat */}
               {roomId !== 'lobby' ? (
                 <div
                   style={{
-                    background: '#1a1a1a',
-                    borderRadius: '12px',
+                    background: 'var(--bg-tertiary)',
+                    borderRadius: '10px',
                     overflow: 'hidden',
-                    height: '220px',
+                    height: '200px',
                     flexShrink: 0,
                     resize: 'vertical',
                     minHeight: '150px',
-                    border: '1px solid #2a2a2a',
+                    border: '1px solid var(--border-primary)',
                   }}
                 >
-                  <GameChat key={roomId} user={user} roomId={roomId} />
+                  <GameChat key={roomId} user={user} roomId={roomId} socket={socket} />
                 </div>
               ) : (
                 <div
                   style={{
-                    background: '#1a1a1a',
-                    borderRadius: '12px',
-                    height: '220px',
+                    background: 'var(--bg-tertiary)',
+                    borderRadius: '10px',
+                    height: '200px',
                     flexShrink: 0,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexDirection: 'column',
                     gap: '12px',
-                    color: '#888',
-                    border: '1px solid #2a2a2a',
+                    color: 'var(--text-tertiary)',
+                    border: '1px solid var(--border-primary)',
                   }}
                 >
-                  <span style={{ fontSize: '48px', opacity: 0.5 }}>🎥</span>
-                  <p style={{ fontSize: '14px', margin: 0 }}>Join a room to start video call</p>
+                  <Icons.Video />
+                  <p style={{ fontSize: '13px', margin: 0 }}>Join a room to start video call</p>
                 </div>
               )}
+
               {/* Text Chat */}
               <div
                 style={{
-                  background: '#1a1a1a',
-                  borderRadius: '12px',
+                  background: 'var(--bg-tertiary)',
+                  borderRadius: '10px',
                   overflow: 'hidden',
                   flex: 1,
                   minHeight: 0,
-                  border: '1px solid #2a2a2a',
+                  border: '1px solid var(--border-primary)',
                 }}
               >
-                <Chat user={user} roomId={roomId} />
+                <Chat user={user} roomId={roomId} socket={socket} />
               </div>
             </div>
           )}
@@ -714,145 +1040,186 @@ const Dashboard = () => {
         <div
           style={{
             position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(0,0,0,0.7)',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.7)',
             backdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 2000,
+            animation: 'fadeIn 0.2s ease',
           }}
+          onClick={(e) => e.target === e.currentTarget && setShowRoomModal(false)}
         >
           <div
             style={{
-              background: '#1a1a1a',
+              background: 'var(--bg-secondary)',
               borderRadius: '16px',
-              width: '420px',
+              width: '440px',
               maxWidth: '90%',
-              padding: '28px',
-              border: '1px solid #2a2a2a',
-              boxShadow: '0 20px 35px rgba(0,0,0,0.4)',
+              padding: '24px',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-xl)',
+              animation: 'scaleIn 0.2s ease',
             }}
           >
-            <h2 style={{ margin: '0 0 8px 0', color: '#fff', fontSize: '22px', fontWeight: 600 }}>
-              Join or Create Room
-            </h2>
-            <p style={{ color: '#888', marginBottom: '24px', fontSize: '14px' }}>
-              Collaborate with friends in real-time
-            </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div>
+                <h2 style={{ margin: '0 0 4px 0', color: 'var(--text-primary)', fontSize: '20px', fontWeight: 600 }}>
+                  Join or Create Room
+                </h2>
+                <p style={{ color: 'var(--text-tertiary)', margin: 0, fontSize: '13px' }}>
+                  Collaborate with friends in real-time
+                </p>
+              </div>
+              <button
+                onClick={() => setShowRoomModal(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-tertiary)',
+                  padding: '8px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all var(--transition-fast)',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = 'var(--bg-hover)';
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'var(--text-tertiary)';
+                }}
+              >
+                <Icons.X />
+              </button>
+            </div>
+
+            {/* Create Room */}
             <div style={{ marginBottom: '24px' }}>
               <label
                 style={{
-                  color: '#ccc',
-                  fontSize: '13px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '12px',
                   marginBottom: '8px',
                   display: 'block',
                   fontWeight: 500,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
                 }}
               >
                 Create New Room
               </label>
               <input
                 type="text"
-                placeholder="Room name"
+                placeholder="Enter room name..."
                 value={newRoomName}
                 onChange={e => setNewRoomName(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: '#2a2a2a',
-                  border: '1px solid #3a3a3a',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  outline: 'none',
-                  marginBottom: '12px',
-                }}
+                onKeyPress={e => e.key === 'Enter' && createRoom()}
+                className="input"
+                style={{ marginBottom: '10px' }}
               />
               <button
                 onClick={createRoom}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  background: '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                }}
+                className="btn btn-primary"
+                style={{ width: '100%' }}
               >
                 Create Room
               </button>
             </div>
-            <div style={{ marginBottom: '24px' }}>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                marginBottom: '24px',
+              }}
+            >
+              <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+              <span style={{ color: 'var(--text-tertiary)', fontSize: '12px', fontWeight: 500 }}>OR</span>
+              <div style={{ flex: 1, height: '1px', background: 'var(--border-primary)' }} />
+            </div>
+
+            {/* Join Room */}
+            <div style={{ marginBottom: '20px' }}>
               <label
                 style={{
-                  color: '#ccc',
-                  fontSize: '13px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '12px',
                   marginBottom: '8px',
                   display: 'block',
                   fontWeight: 500,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
                 }}
               >
                 Join Existing Room
               </label>
               <input
                 type="text"
-                placeholder="Enter room code"
+                placeholder="Enter room code..."
                 value={joinRoomId}
                 onChange={e => setJoinRoomId(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: '#2a2a2a',
-                  border: '1px solid #3a3a3a',
-                  borderRadius: '8px',
-                  color: '#fff',
-                  fontSize: '14px',
-                  outline: 'none',
-                  marginBottom: '12px',
-                }}
+                onKeyPress={e => e.key === 'Enter' && joinRoom()}
+                className="input"
+                style={{ marginBottom: '10px' }}
               />
               <button
                 onClick={joinRoom}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  background: '#2196F3',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                  fontWeight: 500,
-                }}
+                className="btn btn-secondary"
+                style={{ width: '100%', background: 'var(--accent)', color: 'white', border: 'none' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--accent-hover)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'var(--accent)')}
               >
                 Join Room
               </button>
             </div>
+
             <button
               onClick={() => setShowRoomModal(false)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                background: '#dc2626',
-                color: 'white',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                fontSize: '14px',
-              }}
+              className="btn btn-ghost"
+              style={{ width: '100%' }}
             >
               Cancel
             </button>
           </div>
         </div>
       )}
+
+      {/* Keyboard Shortcuts Hint */}
+      <div
+        style={{
+          position: 'fixed',
+          bottom: '16px',
+          left: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '16px',
+          padding: '8px 12px',
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-primary)',
+          borderRadius: '8px',
+          fontSize: '11px',
+          color: 'var(--text-tertiary)',
+          zIndex: 50,
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <kbd className="kbd">Ctrl</kbd>
+          <kbd className="kbd">B</kbd>
+          <span>Toggle Friends</span>
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <kbd className="kbd">Ctrl</kbd>
+          <kbd className="kbd">.</kbd>
+          <span>Toggle Chat</span>
+        </span>
+      </div>
     </div>
   );
 };

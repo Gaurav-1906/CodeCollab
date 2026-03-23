@@ -8,6 +8,8 @@ const dotenv = require('dotenv');
 const connectDB = require('./src/config/db');
 const connectRedis = require('./src/config/redis');
 const User = require('./src/models/User');
+const WebSocket = require('ws');
+const { setupWSConnection } = require('y-websocket/bin/utils');
 
 // Import routes
 const authRoutes = require('./src/routes/authRoutes');
@@ -42,9 +44,27 @@ const isOriginAllowed = (origin) => {
     return true;
   }
   
+  // Allow v0.dev preview URLs
+  if (origin.match(/^https:\/\/.*v0\.dev$/) || origin.match(/^https:\/\/.*v0\.app$/)) {
+    console.log(`✅ v0 preview allowed: ${origin}`);
+    return true;
+  }
+  
+  // Allow vusercontent blob URLs (v0 preview)
+  if (origin.match(/^https:\/\/.*vusercontent\.net$/)) {
+    console.log(`✅ vusercontent allowed: ${origin}`);
+    return true;
+  }
+  
   // Allow localhost for development
   if (origin.match(/^http:\/\/localhost:\d+$/)) {
     console.log(`✅ Localhost allowed: ${origin}`);
+    return true;
+  }
+  
+  // In development mode, allow all origins
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`✅ Development mode - allowing: ${origin}`);
     return true;
   }
   
@@ -227,6 +247,18 @@ app.post('/api/execute', async (req, res) => {
 // -------------------------------------------------------------------
 const server = http.createServer(app);
 
+// Yjs WebSocket server for collaborative editing
+server.on('upgrade', (request, socket, head) => {
+  const pathname = request.url;
+  if (pathname && pathname.startsWith('/code-')) {
+    const wss = new WebSocket.Server({ noServer: true });
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      setupWSConnection(ws, request);
+    });
+  }
+  // Other upgrades (like Socket.IO) will be handled by their respective libraries
+});
+
 const io = new Server(server, {
   cors: {
     origin: (origin, callback) => {
@@ -251,8 +283,20 @@ app.set('io', io);
 app.set('redis', redisClient);
 
 // Socket.io data stores
-const userSockets = new Map(); // userId -> socketId
-const roomParticipants = new Map(); // roomId -> Set of userIds
+const userSockets = new Map(); // userId -> Set of socketIds
+const socketToUserId = new Map(); // socketId -> userId
+const roomParticipants = new Map(); // roomId -> Map<userId, Set<socketIds>>
+
+const emitToUser = (userId, event, payload) => {
+  const sockets = userSockets.get(userId);
+  if (!sockets) return;
+  sockets.forEach(sockId => io.to(sockId).emit(event, payload));
+};
+
+const getUniqueParticipantCount = (roomId) => {
+  const room = roomParticipants.get(roomId);
+  return room ? room.size : 0;
+};
 
 // Socket.io connection handler
 io.on('connection', (socket) => {
@@ -261,7 +305,13 @@ io.on('connection', (socket) => {
   // Register user
   socket.on('register-user', ({ userId }) => {
     socket.data.userId = userId;
-    userSockets.set(userId, socket.id);
+    socketToUserId.set(socket.id, userId);
+
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
+    }
+    userSockets.get(userId).add(socket.id);
+
     console.log(`✅ User ${userId} registered with socket ${socket.id}`);
     console.log(`📱 Total connected users: ${userSockets.size}`);
   });
@@ -274,15 +324,12 @@ io.on('connection', (socket) => {
       const currentRoom = socket.data.currentRoom || null;
       
       user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', {
-            userId,
-            status: 'online',
-            username: user.username,
-            currentRoom
-          });
-        }
+        emitToUser(friend._id.toString(), 'friend-status-changed', {
+          userId,
+          status: 'online',
+          username: user.username,
+          currentRoom
+        });
       });
     } catch (error) {
       console.error('Error updating online status:', error);
@@ -291,12 +338,7 @@ io.on('connection', (socket) => {
 
   // Send friend request
   socket.on('send-friend-request', ({ to, from, fromUsername }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friend-request-received', { from, fromUsername });
-    } else {
-      console.log(`❌ User ${to} is not connected`);
-    }
+    emitToUser(to, 'friend-request-received', { from, fromUsername });
   });
 
   // Accept friend request
@@ -306,16 +348,10 @@ io.on('connection', (socket) => {
       await User.findByIdAndUpdate(to, { $addToSet: { friends: from } });
       
       const friend = await User.findById(to).select('-password');
-      const senderSocketId = userSockets.get(from);
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('friend-request-accepted', { friend });
-      }
+      emitToUser(from, 'friend-request-accepted', { friend });
       
       const sender = await User.findById(from).select('-password');
-      const targetSocketId = userSockets.get(to);
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('friend-request-accepted', { friend: sender });
-      }
+      emitToUser(to, 'friend-request-accepted', { friend: sender });
     } catch (err) {
       console.error('Accept friend error:', err);
     }
@@ -323,57 +359,86 @@ io.on('connection', (socket) => {
 
   // Reject friend request
   socket.on('reject-friend-request', ({ to, from }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('friend-request-rejected', { from });
-    }
+    emitToUser(to, 'friend-request-rejected', { from });
   });
 
   // Join room
   socket.on('join-room', async ({ roomId, userId, username }) => {
     const previousRoom = socket.data.currentRoom;
-    
+
     if (previousRoom && previousRoom !== roomId) {
       socket.leave(previousRoom);
       if (roomParticipants.has(previousRoom)) {
-        roomParticipants.get(previousRoom).delete(userId);
-        const count = roomParticipants.get(previousRoom).size;
+        const room = roomParticipants.get(previousRoom);
+        const userRoomSet = room.get(userId);
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(userId);
+            socket.to(previousRoom).emit('user-left', userId);
+            io.to(`chat-${previousRoom}`).emit('user-left-notification', { username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(previousRoom);
         io.to(previousRoom).emit('room-participants-count', { roomId: previousRoom, count });
-        io.to(`chat-${previousRoom}`).emit('user-left-notification', { username });
       }
     }
 
-    userSockets.set(userId, socket.id);
     socket.data.userId = userId;
+    socket.data.username = username;
+    socketToUserId.set(socket.id, userId);
+
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
+    }
+    userSockets.get(userId).add(socket.id);
+
     socket.join(roomId);
     socket.data.currentRoom = roomId;
-    socket.data.username = username;
-
-    console.log(`${username} joined room: ${roomId}`);
 
     if (!roomParticipants.has(roomId)) {
-      roomParticipants.set(roomId, new Set());
+      roomParticipants.set(roomId, new Map());
     }
-    roomParticipants.get(roomId).add(userId);
-    const count = roomParticipants.get(roomId).size;
+    const room = roomParticipants.get(roomId);
+    if (!room.has(userId)) {
+      room.set(userId, new Set());
+    }
+    const userRoomSet = room.get(userId);
+    const wasAlreadyInRoom = userRoomSet.size > 0;
+    userRoomSet.add(socket.id);
+
+    const count = getUniqueParticipantCount(roomId);
     io.to(roomId).emit('room-participants-count', { roomId, count });
 
-    socket.to(roomId).emit('user-joined', { userId, username });
-    socket.to(roomId).emit('user-joined-notification', { username, roomId });
-    io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
+    if (!wasAlreadyInRoom) {
+      // Notify existing room members about newcomer
+      socket.to(roomId).emit('user-joined', { userId, username });
+      socket.to(roomId).emit('user-joined-notification', { username, roomId });
+      io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
+    }
+
+    // Send list of currently in-room users to the newly joined client
+    const socketIdsInRoom = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+    const existingUsers = [];
+    socketIdsInRoom.forEach(sid => {
+      if (sid === socket.id) return;
+      const s = io.sockets.sockets.get(sid);
+      if (s && s.data && s.data.userId && s.data.username) {
+        existingUsers.push({ userId: s.data.userId, username: s.data.username });
+      }
+    });
+    socket.emit('all-users', { users: existingUsers });
 
     try {
       const user = await User.findById(userId).populate('friends');
       user.friends.forEach(friend => {
-        const friendSocketId = userSockets.get(friend._id.toString());
-        if (friendSocketId) {
-          io.to(friendSocketId).emit('friend-status-changed', {
-            userId,
-            status: 'online',
-            username: user.username,
-            currentRoom: roomId
-          });
-        }
+        emitToUser(friend._id.toString(), 'friend-status-changed', {
+          userId,
+          status: 'online',
+          username: user.username,
+          currentRoom: roomId
+        });
       });
     } catch (error) {
       console.error('Error updating friend status:', error);
@@ -383,7 +448,7 @@ io.on('connection', (socket) => {
   // Request participants count
   socket.on('request-participants-count', ({ roomId }) => {
     if (roomParticipants.has(roomId)) {
-      const count = roomParticipants.get(roomId).size;
+      const count = getUniqueParticipantCount(roomId);
       io.to(socket.id).emit('room-participants-count', { roomId, count });
     }
   });
@@ -396,46 +461,37 @@ io.on('connection', (socket) => {
       socket.data.currentRoom = null;
 
       if (roomParticipants.has(currentRoom)) {
-        roomParticipants.get(currentRoom).delete(userId);
-        const count = roomParticipants.get(currentRoom).size;
+        const room = roomParticipants.get(currentRoom);
+        const userRoomSet = room.get(userId);
+
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(userId);
+            socket.to(currentRoom).emit('user-left', userId);
+            io.to(`chat-${currentRoom}`).emit('user-left-notification', { username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(currentRoom);
         io.to(currentRoom).emit('room-participants-count', { roomId: currentRoom, count });
       }
 
-      socket.to(currentRoom).emit('user-left-notification', { username });
-      io.to(`chat-${currentRoom}`).emit('user-left-notification', { username });
       console.log(`${username} left room: ${currentRoom}`);
 
       try {
         const user = await User.findById(userId).populate('friends');
         user.friends.forEach(friend => {
-          const friendSocketId = userSockets.get(friend._id.toString());
-          if (friendSocketId) {
-            io.to(friendSocketId).emit('friend-status-changed', {
-              userId,
-              status: 'online',
-              username: user.username,
-              currentRoom: null
-            });
-          }
+          emitToUser(friend._id.toString(), 'friend-status-changed', {
+            userId,
+            status: 'online',
+            username: user.username,
+            currentRoom: null
+          });
         });
       } catch (error) {
         console.error('Error updating friend status on leave:', error);
       }
-    }
-  });
-
-  // WebRTC signaling
-  socket.on('send-signal', ({ signal, to, from, username }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('receive-call', { signal, from, username });
-    }
-  });
-
-  socket.on('return-signal', ({ signal, to }) => {
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('signal-returned', { signal, from: socket.id });
     }
   });
 
@@ -456,70 +512,81 @@ io.on('connection', (socket) => {
     socket.to(chatRoom).emit('user-typing', { username, isTyping });
   });
 
+  // WebRTC signaling
+  socket.on('send-signal', ({ signal, to, from, username }) => {
+    emitToUser(to, 'receive-call', { signal, from, username });
+  });
+
+  socket.on('return-signal', ({ signal, to }) => {
+    emitToUser(to, 'signal-returned', { signal, from: socket.data.userId || socket.id });
+  });
+
   // Invite functionality
   socket.on('send-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} invited user ${to} to room: ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      console.log(`📤 Sending invite to socket: ${targetSocketId}`);
-      io.to(targetSocketId).emit('invite-received', { from, room, fromUsername });
-    } else {
-      console.log(`❌ Target user ${to} not connected`);
-    }
+    emitToUser(to, 'invite-received', { from, room, fromUsername });
   });
 
   socket.on('accept-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} accepted invite from ${to} to room ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('invite-accepted', { from, fromUsername, room });
-    }
+    emitToUser(to, 'invite-accepted', { from, fromUsername, room });
   });
 
   socket.on('reject-invite', ({ to, from, fromUsername, room }) => {
     console.log(`${fromUsername} rejected invite from ${to} to room ${room}`);
-    const targetSocketId = userSockets.get(to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('invite-rejected', { from, fromUsername, room });
-    }
+    emitToUser(to, 'invite-rejected', { from, fromUsername, room });
   });
 
   // Disconnect handler
   socket.on('disconnect', async () => {
     const userId = socket.data.userId;
     if (userId) {
-      try {
-        await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
-        const user = await User.findById(userId).populate('friends');
-        
-        user.friends.forEach(friend => {
-          const friendSocketId = userSockets.get(friend._id.toString());
-          if (friendSocketId) {
-            io.to(friendSocketId).emit('friend-status-changed', { 
-              userId, 
-              status: 'offline', 
-              username: user.username 
+      const userSocketSet = userSockets.get(userId);
+      if (userSocketSet) {
+        userSocketSet.delete(socket.id);
+        if (userSocketSet.size === 0) {
+          userSockets.delete(userId);
+
+          try {
+            await User.findByIdAndUpdate(userId, { status: 'offline', lastSeen: Date.now() });
+            const user = await User.findById(userId).populate('friends');
+            
+            user.friends.forEach(friend => {
+              emitToUser(friend._id.toString(), 'friend-status-changed', {
+                userId,
+                status: 'offline',
+                username: user.username
+              });
             });
+          } catch (error) {
+            console.error('Error updating offline status:', error);
           }
-        });
-      } catch (error) {
-        console.error('Error updating offline status:', error);
+        }
       }
-      
-      userSockets.delete(userId);
+
+      socketToUserId.delete(socket.id);
     }
     
     if (socket.data.currentRoom && socket.data.userId) {
       const roomId = socket.data.currentRoom;
       if (roomParticipants.has(roomId)) {
-        roomParticipants.get(roomId).delete(socket.data.userId);
-        const count = roomParticipants.get(roomId).size;
+        const room = roomParticipants.get(roomId);
+        const userRoomSet = room.get(socket.data.userId);
+
+        if (userRoomSet) {
+          userRoomSet.delete(socket.id);
+          if (userRoomSet.size === 0) {
+            room.delete(socket.data.userId);
+            socket.to(roomId).emit('user-left', socket.data.userId);
+            io.to(`chat-${roomId}`).emit('user-left-notification', { username: socket.data.username });
+          }
+        }
+
+        const count = getUniqueParticipantCount(roomId);
         io.to(roomId).emit('room-participants-count', { roomId, count });
       }
-      socket.to(roomId).emit('user-left', socket.data.userId);
-      io.to(`chat-${roomId}`).emit('user-left-notification', { username: socket.data.username });
     }
-    
+
     console.log('❌ Client disconnected:', socket.id);
     console.log(`📱 Remaining connected users: ${userSockets.size}`);
   });
