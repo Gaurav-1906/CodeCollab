@@ -1,3 +1,7 @@
+if (typeof window !== 'undefined' && !window.process) {
+  window.process = { nextTick: (fn) => setTimeout(fn, 0) };
+}
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import socket from '../socket';
 import Peer from 'simple-peer';
@@ -163,7 +167,7 @@ const GameChat = ({ user, roomId }) => {
       users.forEach(({ userId, username }) => {
         if (userId === user._id) return;
         if (peersRef.current[userId]) return; // avoid duplicates
-        const peer = createPeer(userId, socketRef.current.id, stream);
+        const peer = createPeer(userId, socketRef.current.id, user._id, stream);
         peersRef.current[userId] = { peer, username, peerId: userId };
       });
       setPeers(Object.values(peersRef.current));
@@ -208,7 +212,7 @@ const GameChat = ({ user, roomId }) => {
     };
   }, [roomId, user?._id, user?.username]);
 
-  const createPeer = (targetUserId, callerId, stream) => {
+  const createPeer = (targetUserId, callerId, callerUserId, stream) => {
     const peer = new Peer({
       initiator: true,
       trickle: false,
@@ -226,7 +230,7 @@ const GameChat = ({ user, roomId }) => {
         socketRef.current.emit('send-signal', {
           signal,
           to: targetUserId,
-          from: callerId,
+          from: callerUserId,
           username: user?.username,
         });
       }
@@ -260,6 +264,7 @@ const GameChat = ({ user, roomId }) => {
 
     peer.on('signal', signal => {
       if (socketRef.current) {
+        // callerId is the userId of initiator
         socketRef.current.emit('return-signal', { signal, to: callerId });
       }
     });
