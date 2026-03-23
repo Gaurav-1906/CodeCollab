@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import io from 'socket.io-client';
+import socket from '../socket';
 import GameChat from '../components/GameChat';
 import Chat from '../components/Chat';
 import FriendsList from '../components/FriendsList';
@@ -171,20 +171,17 @@ const Dashboard = () => {
   useEffect(() => {
     if (!user) return;
 
-    console.log('Connecting to Socket.IO at:', SOCKET_URL);
-    const newSocket = io(SOCKET_URL, {
-      withCredentials: true,
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000
-    });
+    console.log('Connecting to shared Socket.IO connection', socket.id ? `id ${socket.id}` : '(not connected yet)');
 
-    newSocket.on('connect', () => {
-      console.log('Socket connected with ID:', newSocket.id);
+    if (!socket.connected) {
+      socket.connect();
+    }
+
+    socket.on('connect', () => {
+      console.log('Socket connected with ID:', socket.id);
       setSocketReady(true);
-      newSocket.emit('register-user', { userId: user._id });
-      newSocket.emit('user-online', { userId: user._id });
+      socket.emit('register-user', { userId: user._id });
+      socket.emit('user-online', { userId: user._id });
     });
 
     newSocket.on('connect_error', (error) => {
@@ -210,10 +207,15 @@ const Dashboard = () => {
       }
     });
 
-    setSocket(newSocket);
+    setSocket(socket);
 
     return () => {
-      newSocket.disconnect();
+      // Keep shared socket alive: other components may still use the same socket.
+      socket.off('connect');
+      socket.off('connect_error');
+      socket.off('user-joined-notification');
+      socket.off('user-left-notification');
+      socket.off('room-participants-count');
     };
   }, [user, showNotification]);
 
