@@ -141,17 +141,18 @@ const GameChat = ({ user, roomId }) => {
         if (!mountedRef.current) return;
         setConnectionStatus('Camera denied');
         setStatusType('error');
-        socketRef.current.emit('join-room', {
-          roomId,
-          userId: user._id,
-          username: user.username,
-        });
       });
 
     socketRef.current.on('user-joined', ({ userId, username }) => {
       if (!mountedRef.current) return;
       setConnectionStatus(`${username} joined`);
       setStatusType('connected');
+
+      if (!stream) {
+        console.warn('No local media stream yet, skipping peer creation for', username);
+        return;
+      }
+
       if (!peersRef.current[userId] && socketRef.current) {
         const peer = createPeer(userId, socketRef.current.id, stream);
         peersRef.current[userId] = { peer, username, peerId: userId };
