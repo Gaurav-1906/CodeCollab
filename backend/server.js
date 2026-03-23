@@ -412,10 +412,23 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('room-participants-count', { roomId, count });
 
     if (!wasAlreadyInRoom) {
+      // Notify existing room members about newcomer
       socket.to(roomId).emit('user-joined', { userId, username });
       socket.to(roomId).emit('user-joined-notification', { username, roomId });
       io.to(`chat-${roomId}`).emit('user-joined-notification', { username, roomId });
     }
+
+    // Send list of currently in-room users to the newly joined client
+    const socketIdsInRoom = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+    const existingUsers = [];
+    socketIdsInRoom.forEach(sid => {
+      if (sid === socket.id) return;
+      const s = io.sockets.sockets.get(sid);
+      if (s && s.data && s.data.userId && s.data.username) {
+        existingUsers.push({ userId: s.data.userId, username: s.data.username });
+      }
+    });
+    socket.emit('all-users', { users: existingUsers });
 
     try {
       const user = await User.findById(userId).populate('friends');
